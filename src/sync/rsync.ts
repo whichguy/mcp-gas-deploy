@@ -105,6 +105,8 @@ async function readLocalFiles(
     }
 
     const entryName = entry.name;
+    // Skip hidden files (e.g., .gas-sync-state.json, .gitignore)
+    if (entryName.startsWith('.')) continue;
     if (!entryName.endsWith('.gs') && !entryName.endsWith('.html') && !entryName.endsWith('.json')) continue;
 
     // Skip operational/config files at root level only

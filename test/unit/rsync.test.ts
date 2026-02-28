@@ -110,6 +110,17 @@ describe('getStatus', () => {
     assert.deepEqual(status.both.map(f => f.name), ['main']);
     assert.deepEqual(status.localOnly, []);
   });
+
+  it('excludes hidden files (e.g. .gas-sync-state.json) from local files', async () => {
+    await fs.writeFile(path.join(tmpDir, '.gas-sync-state.json'), '{}', 'utf-8');
+    await fs.writeFile(path.join(tmpDir, 'main.gs'), '// main', 'utf-8');
+    const fileOps = makeFileOps([gasFile('main')]);
+
+    const status = await getStatus('scriptId', tmpDir, fileOps);
+
+    assert.deepEqual(status.both.map(f => f.name), ['main']);
+    assert.deepEqual(status.localOnly, []);
+  });
 });
 
 // --- push ---
