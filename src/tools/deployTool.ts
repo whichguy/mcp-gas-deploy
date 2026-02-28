@@ -2,21 +2,56 @@
  * Deploy Tool for mcp-gas-deploy
  *
  * Creates a version snapshot and pins a web app deployment (staging/prod).
- * Pre-deploy: validates + pushes if local is ahead.
+ * Pre-deploy: validates + pushes all local files unconditionally.
  * Stores deployment URLs in gas-deploy.json.
  */
 
 import path from 'node:path';
 import os from 'node:os';
+import { promises as fs } from 'node:fs';
 import { GASFileOperations } from '../api/gasFileOperations.js';
 import { GASDeployOperations } from '../api/gasDeployOperations.js';
-import { getStatus, push } from '../sync/rsync.js';
+import { push } from '../sync/rsync.js';
 import {
   getDeploymentInfo,
   setDeploymentInfo,
   type DeploymentInfo,
 } from '../config/deployConfig.js';
 import { SCRIPT_ID_PATTERN } from '../utils/validation.js';
+
+/** Default web app manifest config — applied when deploying a project with no webapp section. */
+const DEFAULT_WEBAPP_CONFIG = {
+  executeAs: 'USER_ACCESSING',
+  access: 'MYSELF',
+} as const;
+
+/**
+ * Ensure the local appsscript.json has a webapp section.
+ * If missing, injects DEFAULT_WEBAPP_CONFIG so the deployment serves as a web app.
+ * Non-throwing — failure is logged and ignored (version creation will proceed regardless).
+ */
+async function ensureWebAppManifest(localDir: string): Promise<void> {
+  const manifestPath = path.join(localDir, 'appsscript.json');
+  let content: string;
+  try {
+    content = await fs.readFile(manifestPath, 'utf-8');
+  } catch {
+    return; // No local manifest — nothing to inject
+  }
+
+  let manifest: Record<string, unknown>;
+  try {
+    manifest = JSON.parse(content) as Record<string, unknown>;
+  } catch {
+    return; // Malformed JSON — leave it as-is
+  }
+
+  if (manifest.webapp) return; // Already configured
+
+  manifest.webapp = DEFAULT_WEBAPP_CONFIG;
+  await fs.writeFile(manifestPath, JSON.stringify(manifest, null, 2) + '\n', 'utf-8');
+  console.error('[deploy] Injected default webapp config into appsscript.json');
+}
 
 export interface DeployToolParams {
   scriptId: string;
@@ -31,7 +66,6 @@ export interface DeployToolResult {
   versionNumber?: number;
   deploymentId?: string;
   webAppUrl?: string;
-  syncedBeforeDeploy: boolean;
   error?: string;
   hints: Record<string, string>;
 }
@@ -40,7 +74,7 @@ export const DEPLOY_TOOL_DEFINITION = {
   name: 'deploy',
   description: `Create a version snapshot and pin a web app deployment (staging or prod).
 
-Pre-deploy: validates CommonJS and pushes changed files if needed.
+Pre-deploy: validates CommonJS and pushes all local files unconditionally.
 Stores deployment URLs in local gas-deploy.json for use by exec.`,
   inputSchema: {
     type: 'object' as const,
@@ -76,7 +110,7 @@ export async function handleDeployTool(
 
   if (!SCRIPT_ID_PATTERN.test(scriptId)) {
     return {
-      success: false, environment: to, syncedBeforeDeploy: false,
+      success: false, environment: to,
       error: 'Invalid scriptId format',
       hints: { fix: 'scriptId must be 20+ alphanumeric characters, hyphens, or underscores' },
     };
@@ -88,44 +122,34 @@ export async function handleDeployTool(
 
   if (localDir && !resolvedDir.startsWith(os.homedir())) {
     return {
-      success: false, environment: to, syncedBeforeDeploy: false,
+      success: false, environment: to,
       error: 'localDir must resolve within your home directory',
       hints: { fix: 'Use an absolute path within your home directory or omit localDir' },
     };
   }
 
-  // Pre-deploy: check sync status and push if needed
-  let syncedBeforeDeploy = false;
-
+  // Inject default webapp config if not present — must happen before sync so it gets pushed with the version.
   try {
-    const status = await getStatus(scriptId, resolvedDir, fileOps);
+    await ensureWebAppManifest(resolvedDir);
+  } catch {
+    // Non-blocking — proceed without webapp config injection
+  }
 
-    // Divergence guard
-    if (status.localAhead.length > 0 && status.remoteAhead.length > 0) {
+  // Pre-deploy: push all local files unconditionally
+  try {
+    const pushResult = await push(scriptId, resolvedDir, fileOps);
+
+    if (!pushResult.success) {
       return {
-        success: false, environment: to, syncedBeforeDeploy: false,
-        error: 'Remote has changes not in your local copy — run `pull` first to merge, then retry',
-        hints: { fix: 'Your local and remote have diverged. Pull remote changes first.' },
+        success: false, environment: to,
+        error: `Pre-deploy push failed: ${pushResult.error}`,
+        hints: { fix: 'Fix validation errors or check authentication, then retry deploy' },
       };
-    }
-
-    if (status.localAhead.length > 0 || status.localOnly.length > 0) {
-      const pushResult = await push(scriptId, resolvedDir, fileOps);
-
-      if (!pushResult.success) {
-        return {
-          success: false, environment: to, syncedBeforeDeploy: false,
-          error: `Pre-deploy push failed: ${pushResult.error}`,
-          hints: { fix: 'Fix validation errors or check authentication, then retry deploy' },
-        };
-      }
-
-      syncedBeforeDeploy = true;
     }
   } catch (error: unknown) {
     // If localDir doesn't exist, continue — deploy works from remote state
     const message = error instanceof Error ? error.message : String(error);
-    console.error(`Pre-deploy sync check skipped: ${message}`);
+    console.error(`Pre-deploy push skipped: ${message}`);
   }
 
   try {
@@ -187,7 +211,6 @@ export async function handleDeployTool(
       versionNumber: version.versionNumber,
       deploymentId,
       webAppUrl,
-      syncedBeforeDeploy,
       hints: {
         next: webAppUrl
           ? `Deployed to ${to} (v${version.versionNumber}). URL: ${webAppUrl}. Run \`exec\` to verify.`
@@ -198,7 +221,7 @@ export async function handleDeployTool(
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
     return {
-      success: false, environment: to, syncedBeforeDeploy,
+      success: false, environment: to,
       error: `Deploy failed: ${message}`,
       hints: { fix: 'Check authentication and project permissions. If deploy failed after version creation, re-run deploy to re-pin.' },
     };
