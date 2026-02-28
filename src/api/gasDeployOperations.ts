@@ -6,7 +6,7 @@
  */
 
 import { GASAuthOperations } from './gasAuthOperations.js';
-import { GASDeployment, GASVersion } from './gasTypes.js';
+import { EntryPoint, GASDeployment, GASVersion } from './gasTypes.js';
 
 /**
  * Manages GAS deployment and version operations.
@@ -30,11 +30,15 @@ export class GASDeployOperations {
         },
       });
 
-      console.error(`createVersion: created v${response.data.versionNumber} for ${scriptId}`);
+      const versionNumber = response.data.versionNumber;
+      if (versionNumber == null) {
+        throw new Error(`createVersion: API response missing versionNumber for ${scriptId}`);
+      }
+      console.error(`createVersion: created v${versionNumber} for ${scriptId}`);
 
       return {
         scriptId: response.data.scriptId ?? scriptId,
-        versionNumber: response.data.versionNumber ?? 0,
+        versionNumber,
         description: response.data.description ?? undefined,
         createTime: response.data.createTime ?? undefined,
       };
@@ -50,9 +54,9 @@ export class GASDeployOperations {
       const deployments = response.data.deployments ?? [];
       console.error(`listDeployments: found ${deployments.length} deployments for ${scriptId}`);
 
-      // Cast to any: googleapis Schema$Deployment type omits several documented fields
-      return deployments.map((d): GASDeployment => {
-        const raw = d as any; // eslint-disable-line @typescript-eslint/no-explicit-any
+      // Cast to any[]: googleapis Schema$Deployment type omits several documented fields
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return (deployments as any[]).map((raw): GASDeployment => {
         return {
           deploymentId: raw.deploymentId ?? '',
           versionNumber: raw.versionNumber ?? 0,
@@ -88,17 +92,16 @@ export class GASDeployOperations {
         },
       });
 
+      console.error(`updateDeployment: updated ${deploymentId} successfully`);
+
       // Extract web app URL from entry points if present
       let webAppUrl: string | undefined;
       if (response.data.entryPoints) {
-        const webApp = (response.data.entryPoints as Array<{
-          entryPointType: string;
-          webApp?: { url?: string };
-        }>).find((ep) => ep.entryPointType === 'WEB_APP');
+        const webApp = (response.data.entryPoints as EntryPoint[]).find(
+          (ep) => ep.entryPointType === 'WEB_APP'
+        );
         webAppUrl = webApp?.webApp?.url ?? undefined;
       }
-
-      console.error(`updateDeployment: updated ${deploymentId} successfully`);
 
       // Cast to any: googleapis Schema$Deployment type omits several documented fields
       const raw = response.data as any; // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -108,6 +111,8 @@ export class GASDeployOperations {
         description: raw.description ?? undefined,
         manifestFileName: raw.manifestFileName ?? undefined,
         updateTime: raw.updateTime ?? undefined,
+        deploymentConfig: raw.deploymentConfig,
+        entryPoints: raw.entryPoints,
         webAppUrl,
       };
     });
@@ -129,7 +134,7 @@ export class GASDeployOperations {
     for (const d of deployments) {
       // HEAD deployments have versionNumber === 0 in deploymentConfig (no pinned version)
       const vn = d.deploymentConfig?.versionNumber ?? d.versionNumber;
-      if (!vn) {
+      if (vn === 0) {
         let webAppUrl = d.webAppUrl;
         if (!webAppUrl && d.entryPoints) {
           const ep = d.entryPoints.find((e) => e.entryPointType === 'WEB_APP');
@@ -154,17 +159,17 @@ export class GASDeployOperations {
         },
       });
 
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const raw = response.data as any;
+
       let webAppUrl: string | undefined;
-      if (response.data.entryPoints) {
-        const webApp = (response.data.entryPoints as Array<{
-          entryPointType: string;
-          webApp?: { url?: string };
-        }>).find((ep) => ep.entryPointType === 'WEB_APP');
+      if (raw.entryPoints) {
+        const webApp = (raw.entryPoints as EntryPoint[]).find(
+          (ep) => ep.entryPointType === 'WEB_APP'
+        );
         webAppUrl = webApp?.webApp?.url ?? undefined;
       }
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const raw = response.data as any;
       console.error(`getOrCreateHeadDeployment: created ${raw.deploymentId}, url=${webAppUrl}`);
 
       return {
@@ -198,18 +203,18 @@ export class GASDeployOperations {
         },
       });
 
+      // Cast to any: googleapis Schema$Deployment type omits several documented fields
+      const raw = response.data as any; // eslint-disable-line @typescript-eslint/no-explicit-any
+
       // Extract web app URL from entry points if present
       let webAppUrl: string | undefined;
-      if (response.data.entryPoints) {
-        const webApp = (response.data.entryPoints as Array<{
-          entryPointType: string;
-          webApp?: { url?: string };
-        }>).find((ep) => ep.entryPointType === 'WEB_APP');
+      if (raw.entryPoints) {
+        const webApp = (raw.entryPoints as EntryPoint[]).find(
+          (ep) => ep.entryPointType === 'WEB_APP'
+        );
         webAppUrl = webApp?.webApp?.url ?? undefined;
       }
 
-      // Cast to any: googleapis Schema$Deployment type omits several documented fields
-      const raw = response.data as any; // eslint-disable-line @typescript-eslint/no-explicit-any
       console.error(`createDeployment: created ${raw.deploymentId}`);
 
       return {
