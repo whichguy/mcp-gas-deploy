@@ -296,12 +296,19 @@ export function validateFiles(
 ): ValidationResult[] {
   const results: ValidationResult[] = [];
 
-  // Skip system files that are not user modules
-  const SKIP_FILES = new Set(['require', 'require.gs', 'appsscript', 'appsscript.json']);
+  // Skip system files that are not user modules.
+  // Matched against the leaf name (last path segment) to handle path-prefixed
+  // files like common-js/require.gs or common-js/__mcp_exec.gs.
+  const SKIP_FILES = new Set([
+    'require', 'require.gs',
+    'appsscript', 'appsscript.json',
+    '__mcp_exec', '__mcp_exec_error', '__mcp_exec_success',
+  ]);
 
   for (const file of files) {
     const baseName = file.name.replace(/\.gs$/, '');
-    if (SKIP_FILES.has(baseName) || SKIP_FILES.has(file.name)) continue;
+    const leafName = baseName.split('/').pop() ?? baseName;
+    if (SKIP_FILES.has(baseName) || SKIP_FILES.has(file.name) || SKIP_FILES.has(leafName)) continue;
 
     // Only validate .gs files and extension-less files (GAS convention)
     if (file.name.includes('.') && !file.name.endsWith('.gs')) continue;

@@ -253,6 +253,40 @@ __defineModule__(_main, true);`;
       const results = validateFiles(files, { skipRequirePositionCheck: true });
       assert.equal(results.length, 0);
     });
+
+    it('skips common-js/require.gs (path-prefixed system file)', () => {
+      const files = [
+        { name: 'common-js/require.gs', source: '// runtime — no _main', position: 0 },
+      ];
+      const results = validateFiles(files, { skipRequirePositionCheck: true });
+      assert.equal(results.length, 0);
+    });
+
+    it('skips common-js/__mcp_exec.gs (MCP runtime system file)', () => {
+      const files = [
+        { name: 'common-js/__mcp_exec.gs', source: 'var x = require("mod");', position: 1 },
+      ];
+      const results = validateFiles(files, { skipRequirePositionCheck: true });
+      assert.equal(results.length, 0);
+    });
+
+    it('skips __mcp_exec_error and __mcp_exec_success', () => {
+      const files = [
+        { name: 'common-js/__mcp_exec_error.gs', source: 'exports.x = 1;', position: 1 },
+        { name: 'common-js/__mcp_exec_success.gs', source: 'exports.y = 2;', position: 2 },
+      ];
+      const results = validateFiles(files, { skipRequirePositionCheck: true });
+      assert.equal(results.length, 0);
+    });
+
+    it('still validates user modules in common-js/ subdirectory', () => {
+      const files = [
+        { name: 'common-js/ConfigManager.gs', source: '// no _main or __defineModule__', position: 1 },
+      ];
+      const results = validateFiles(files, { skipRequirePositionCheck: true });
+      assert.equal(results.length, 1);
+      assert.equal(results[0].errors[0].rule, 'MISSING_MAIN');
+    });
   });
 
   describe('validateFilesErrors', () => {
