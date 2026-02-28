@@ -1,7 +1,8 @@
 /**
  * Status Tool for mcp-gas-deploy
  *
- * Compares local files vs remote GAS using Git SHA-1 hashes.
+ * Compares local files vs remote GAS by file name.
+ * Shows which files are local-only, remote-only, or shared.
  */
 
 import path from 'node:path';
@@ -25,10 +26,11 @@ export interface StatusToolResult {
 
 export const STATUS_TOOL_DEFINITION = {
   name: 'status',
-  description: `Compare local .gs files vs remote GAS project using Git SHA-1 hashes.
+  description: `Compare local .gs files vs remote GAS project by file name.
 
-Shows which files are in sync, ahead locally, or changed remotely.
-Local-ahead files will be CommonJS-validated on next push:
+Shows which files are local-only, remote-only, or shared.
+exec and push always push all local files before executing.
+GAS CommonJS pattern:
   function _main() { exports.myFn = ...; }  __defineModule__(_main, false);`,
   inputSchema: {
     type: 'object' as const,
@@ -78,24 +80,22 @@ export async function handleStatusTool(
     const status = await getStatus(scriptId, resolvedDir, fileOps);
 
     const parts: string[] = [];
-    if (status.inSync.length > 0) parts.push(`${status.inSync.length} in sync`);
-    if (status.localAhead.length > 0) parts.push(`${status.localAhead.length} local ahead`);
-    if (status.remoteAhead.length > 0) parts.push(`${status.remoteAhead.length} remote ahead`);
-    if (status.localOnly.length > 0) parts.push(`${status.localOnly.length} local only`);
-    if (status.remoteOnly.length > 0) parts.push(`${status.remoteOnly.length} remote only`);
+    if (status.both.length > 0) parts.push(`${status.both.length} shared`);
+    if (status.localOnly.length > 0) parts.push(`${status.localOnly.length} local only: ${status.localOnly.map(f => f.name).join(', ')}`);
+    if (status.remoteOnly.length > 0) parts.push(`${status.remoteOnly.length} remote only: ${status.remoteOnly.map(f => f.name).join(', ')}`);
 
-    const summary = parts.length > 0 ? parts.join(', ') : 'No files found';
+    const summary = parts.length > 0 ? parts.join(' | ') : 'No files found';
 
     const hints: Record<string, string> = {
       commonjs: 'GAS CommonJS: function _main(){ exports.fn=function(){...}; } __defineModule__(_main,false);',
     };
 
-    if (status.localAhead.length > 0) {
-      hints.next = 'Run `push` to deploy local changes, or `exec` to test (auto-pushes)';
-    } else if (status.remoteAhead.length > 0) {
-      hints.next = 'Run `pull` to fetch remote changes';
+    if (status.localOnly.length > 0) {
+      hints.next = 'local-only files exist — push or exec to sync';
+    } else if (status.remoteOnly.length > 0) {
+      hints.next = 'remote-only files — pull to fetch';
     } else {
-      hints.next = 'Local and remote are in sync. Edit files locally and run `push` when ready.';
+      hints.next = 'in sync';
     }
 
     return { success: true, status, summary, hints };
