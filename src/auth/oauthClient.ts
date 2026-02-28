@@ -198,8 +198,12 @@ export class OAuthClient {
             ? tokens.expiry_date - 60000
             : Date.now() + 3600000;
 
+          if (!tokens.access_token) {
+            throw new Error('Token exchange succeeded but no access_token was returned');
+          }
+
           const tokenInfo: TokenInfo = {
-            access_token: tokens.access_token!,
+            access_token: tokens.access_token,
             refresh_token: tokens.refresh_token ?? undefined,
             expires_at: expiresAt,
             scope: tokens.scope || GAS_SCOPES.join(' '),
@@ -250,7 +254,7 @@ export async function loadOAuthConfig(): Promise<AuthConfig | null> {
     try {
       const content = await fs.readFile(p, 'utf-8');
       const parsed = JSON.parse(content);
-      const installed = parsed.installed || parsed.web || parsed;
+      const installed = parsed.installed || parsed.web || parsed.oauth || parsed;
       return {
         client_id: installed.client_id,
         client_secret: installed.client_secret,

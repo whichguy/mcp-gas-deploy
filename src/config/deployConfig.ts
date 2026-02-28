@@ -15,6 +15,8 @@ export interface DeploymentInfo {
   prodUrl?: string;
   prodDeploymentId?: string;
   prodVersionNumber?: number;
+  headUrl?: string;       // HEAD deployment URL (ends in /dev) — used by exec
+  headDeploymentId?: string;
   lastDeploy?: string; // ISO timestamp
 }
 
@@ -44,7 +46,7 @@ export async function writeDeployConfig(localDir: string, config: DeployConfig):
   try {
     await fs.writeFile(tempPath, JSON.stringify(config, null, 2), 'utf-8');
     await fs.rename(tempPath, configPath);
-  } catch (error) {
+  } catch (error: unknown) {
     try { await fs.unlink(tempPath); } catch { /* ignore */ }
     throw error;
   }
