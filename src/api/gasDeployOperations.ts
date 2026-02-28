@@ -94,17 +94,17 @@ export class GASDeployOperations {
 
       console.error(`updateDeployment: updated ${deploymentId} successfully`);
 
-      // Extract web app URL from entry points if present
+      // Cast to any: googleapis Schema$Deployment type omits several documented fields
+      const raw = response.data as any; // eslint-disable-line @typescript-eslint/no-explicit-any
+
       let webAppUrl: string | undefined;
-      if (response.data.entryPoints) {
-        const webApp = (response.data.entryPoints as EntryPoint[]).find(
+      if (raw.entryPoints) {
+        const webApp = (raw.entryPoints as EntryPoint[]).find(
           (ep) => ep.entryPointType === 'WEB_APP'
         );
         webAppUrl = webApp?.webApp?.url ?? undefined;
       }
 
-      // Cast to any: googleapis Schema$Deployment type omits several documented fields
-      const raw = response.data as any; // eslint-disable-line @typescript-eslint/no-explicit-any
       return {
         deploymentId: raw.deploymentId ?? deploymentId,
         versionNumber: raw.versionNumber ?? versionNumber,
@@ -132,9 +132,9 @@ export class GASDeployOperations {
     const deployments = await this.listDeployments(scriptId);
 
     for (const d of deployments) {
-      // HEAD deployments have versionNumber === 0 in deploymentConfig (no pinned version)
-      const vn = d.deploymentConfig?.versionNumber ?? d.versionNumber;
-      if (vn === 0) {
+      // HEAD deployments have no pinned version — deploymentConfig.versionNumber is absent or 0
+      const isHead = (d.deploymentConfig?.versionNumber ?? 0) === 0;
+      if (isHead) {
         let webAppUrl = d.webAppUrl;
         if (!webAppUrl && d.entryPoints) {
           const ep = d.entryPoints.find((e) => e.entryPointType === 'WEB_APP');
@@ -178,6 +178,8 @@ export class GASDeployOperations {
         description: raw.description ?? undefined,
         manifestFileName: raw.manifestFileName ?? undefined,
         updateTime: raw.updateTime ?? undefined,
+        deploymentConfig: raw.deploymentConfig,
+        entryPoints: raw.entryPoints,
         webAppUrl,
       };
     });
