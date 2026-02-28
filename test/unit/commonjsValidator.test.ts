@@ -1,0 +1,301 @@
+/**
+ * Unit tests for CommonJS Validator
+ *
+ * Tests each of the 7 validation rules with passing and failing examples.
+ */
+
+import { describe, it } from 'mocha';
+import { strict as assert } from 'node:assert';
+import { validateFiles, validateFilesErrors, type ValidationResult } from '../../src/validation/commonjsValidator.js';
+
+// Helper to validate a single file
+function validate(name: string, source: string): ValidationResult {
+  const results = validateFiles([{ name, source, position: 1 }], { skipRequirePositionCheck: true });
+  return results.find(r => r.file === name) ?? { file: name, valid: true, errors: [] };
+}
+
+// Helper to get error rules from a single file
+function errorRules(name: string, source: string): string[] {
+  return validate(name, source).errors.map(e => e.rule);
+}
+
+describe('CommonJS Validator', () => {
+
+  describe('MISSING_MAIN', () => {
+    it('passes when _main is present', () => {
+      const src = `
+function _main() {
+  exports.add = function(a, b) { return a + b; };
+}
+__defineModule__(_main, false);`;
+      assert.ok(!errorRules('Calculator.gs', src).includes('MISSING_MAIN'));
+    });
+
+    it('fails when _main is missing', () => {
+      const src = `
+exports.add = function(a, b) { return a + b; };
+__defineModule__(_main, false);`;
+      assert.ok(errorRules('Calculator.gs', src).includes('MISSING_MAIN'));
+    });
+
+    it('handles _main with whitespace', () => {
+      const src = `
+  function _main() {
+    exports.x = 1;
+  }
+  __defineModule__(_main, false);`;
+      assert.ok(!errorRules('Mod.gs', src).includes('MISSING_MAIN'));
+    });
+  });
+
+  describe('MISSING_DEFINE', () => {
+    it('passes when __defineModule__ is present', () => {
+      const src = `
+function _main() {
+  exports.x = 1;
+}
+__defineModule__(_main, false);`;
+      assert.ok(!errorRules('Mod.gs', src).includes('MISSING_DEFINE'));
+    });
+
+    it('fails when __defineModule__ is missing', () => {
+      const src = `
+function _main() {
+  exports.x = 1;
+}`;
+      assert.ok(errorRules('Mod.gs', src).includes('MISSING_DEFINE'));
+    });
+
+    it('passes with loadNow: true', () => {
+      const src = `
+function _main() {
+  __events__.doGet = function(e) {};
+}
+__defineModule__(_main, true);`;
+      assert.ok(!errorRules('Web.gs', src).includes('MISSING_DEFINE'));
+    });
+  });
+
+  describe('LOADNOW_REQUIRED', () => {
+    it('passes when trigger uses loadNow: true', () => {
+      const src = `
+function _main() {
+  __events__.doGet = function(e) { return ContentService.createTextOutput('ok'); };
+}
+__defineModule__(_main, true);`;
+      assert.ok(!errorRules('Web.gs', src).includes('LOADNOW_REQUIRED'));
+    });
+
+    it('fails when trigger uses loadNow: false', () => {
+      const src = `
+function _main() {
+  __events__.doGet = function(e) {};
+}
+__defineModule__(_main, false);`;
+      assert.ok(errorRules('Web.gs', src).includes('LOADNOW_REQUIRED'));
+    });
+
+    it('detects onOpen trigger', () => {
+      const src = `
+function _main() {
+  __events__.onOpen = function(e) {};
+}
+__defineModule__(_main, false);`;
+      assert.ok(errorRules('Menu.gs', src).includes('LOADNOW_REQUIRED'));
+    });
+
+    it('ignores non-trigger modules', () => {
+      const src = `
+function _main() {
+  exports.helper = function() {};
+}
+__defineModule__(_main, false);`;
+      assert.ok(!errorRules('Utils.gs', src).includes('LOADNOW_REQUIRED'));
+    });
+
+    it('passes with object-form loadNow', () => {
+      const src = `
+function _main() {
+  __events__.onEdit = function(e) {};
+}
+__defineModule__(_main, { loadNow: true });`;
+      assert.ok(!errorRules('Edit.gs', src).includes('LOADNOW_REQUIRED'));
+    });
+  });
+
+  describe('TOP_LEVEL_REQUIRE', () => {
+    it('passes when require is inside _main', () => {
+      const src = `
+function _main() {
+  const Utils = require('Utils');
+  exports.run = function() { return Utils.go(); };
+}
+__defineModule__(_main, false);`;
+      assert.ok(!errorRules('Runner.gs', src).includes('TOP_LEVEL_REQUIRE'));
+    });
+
+    it('fails when require is outside _main', () => {
+      const src = `
+const Utils = require('Utils');
+function _main() {
+  exports.run = function() { return Utils.go(); };
+}
+__defineModule__(_main, false);`;
+      assert.ok(errorRules('Runner.gs', src).includes('TOP_LEVEL_REQUIRE'));
+    });
+
+    it('reports line number for top-level require', () => {
+      const src = `const X = require('X');
+function _main() {}
+__defineModule__(_main, false);`;
+      const result = validate('Bad.gs', src);
+      const err = result.errors.find(e => e.rule === 'TOP_LEVEL_REQUIRE');
+      assert.ok(err);
+      assert.equal(err.line, 1);
+    });
+  });
+
+  describe('TOP_LEVEL_EXPORTS', () => {
+    it('passes when exports are inside _main', () => {
+      const src = `
+function _main() {
+  exports.add = function(a, b) { return a + b; };
+}
+__defineModule__(_main, false);`;
+      assert.ok(!errorRules('Calc.gs', src).includes('TOP_LEVEL_EXPORTS'));
+    });
+
+    it('fails when exports are outside _main', () => {
+      const src = `
+exports.add = function(a, b) { return a + b; };
+function _main() {}
+__defineModule__(_main, false);`;
+      assert.ok(errorRules('Calc.gs', src).includes('TOP_LEVEL_EXPORTS'));
+    });
+
+    it('reports correct line number', () => {
+      const src = `
+exports.bad = 1;
+function _main() {
+  exports.good = 2;
+}
+__defineModule__(_main, false);`;
+      const result = validate('Ex.gs', src);
+      const err = result.errors.find(e => e.rule === 'TOP_LEVEL_EXPORTS');
+      assert.ok(err);
+      assert.equal(err.line, 2);
+    });
+  });
+
+  describe('EVENTS_OUTSIDE_MAIN', () => {
+    it('passes when __events__ is inside _main', () => {
+      const src = `
+function _main() {
+  __events__.doGet = function(e) { return ContentService.createTextOutput('ok'); };
+}
+__defineModule__(_main, true);`;
+      assert.ok(!errorRules('Web.gs', src).includes('EVENTS_OUTSIDE_MAIN'));
+    });
+
+    it('fails when __events__ is outside _main', () => {
+      const src = `
+__events__.doGet = function(e) {};
+function _main() {}
+__defineModule__(_main, true);`;
+      assert.ok(errorRules('Web.gs', src).includes('EVENTS_OUTSIDE_MAIN'));
+    });
+  });
+
+  describe('REQUIRE_POSITION', () => {
+    it('passes when require.gs is at position 0', () => {
+      const files = [
+        { name: 'require.gs', source: '// runtime', position: 0 },
+        { name: 'Utils.gs', source: 'function _main() {}\n__defineModule__(_main, false);', position: 1 },
+      ];
+      const results = validateFiles(files);
+      const posErr = results.find(r => r.file === 'require.gs' && !r.valid);
+      assert.ok(!posErr);
+    });
+
+    it('fails when require.gs is not at position 0', () => {
+      const files = [
+        { name: 'Utils.gs', source: 'function _main() {}\n__defineModule__(_main, false);', position: 0 },
+        { name: 'require.gs', source: '// runtime', position: 1 },
+      ];
+      const results = validateFiles(files);
+      const posErr = results.find(r => r.file === 'require.gs' && !r.valid);
+      assert.ok(posErr);
+      assert.ok(posErr!.errors[0].rule === 'REQUIRE_POSITION');
+    });
+
+    it('skips check when no require.gs in project', () => {
+      const files = [
+        { name: 'Utils.gs', source: 'function _main() {}\n__defineModule__(_main, false);', position: 0 },
+      ];
+      const results = validateFiles(files);
+      assert.ok(!results.find(r => r.file === 'require.gs'));
+    });
+  });
+
+  describe('System files', () => {
+    it('skips require.gs from per-file validation', () => {
+      const files = [
+        { name: 'require.gs', source: '// CommonJS runtime — no _main needed', position: 0 },
+      ];
+      const results = validateFiles(files, { skipRequirePositionCheck: true });
+      assert.equal(results.length, 0);
+    });
+
+    it('skips appsscript.json', () => {
+      const files = [
+        { name: 'appsscript.json', source: '{"timeZone":"America/New_York"}', position: 0 },
+      ];
+      const results = validateFiles(files, { skipRequirePositionCheck: true });
+      assert.equal(results.length, 0);
+    });
+  });
+
+  describe('validateFilesErrors', () => {
+    it('returns only files with errors', () => {
+      const files = [
+        { name: 'Good.gs', source: 'function _main() {\n  exports.x = 1;\n}\n__defineModule__(_main, false);', position: 1 },
+        { name: 'Bad.gs', source: 'function _main() {\n}\n// missing __defineModule__', position: 2 },
+      ];
+      const errors = validateFilesErrors(files, { skipRequirePositionCheck: true });
+      assert.equal(errors.length, 1);
+      assert.equal(errors[0].file, 'Bad.gs');
+      assert.equal(errors[0].errors[0].rule, 'MISSING_DEFINE');
+    });
+  });
+
+  describe('Full valid module', () => {
+    it('passes a complete utility module', () => {
+      const src = `function _main() {
+  const Utils = require('Utils');
+
+  exports.add = function(a, b) { return a + b; };
+  exports.multiply = function(a, b) { return a * b; };
+}
+
+__defineModule__(_main, false);`;
+      const result = validate('Calculator.gs', src);
+      assert.ok(result.valid, `Expected valid, got errors: ${JSON.stringify(result.errors)}`);
+    });
+
+    it('passes a complete trigger module', () => {
+      const src = `function _main() {
+  __events__.onOpen = function(e) {
+    SpreadsheetApp.getUi().createMenu('MyApp').addItem('Run', 'runApp').addToUi();
+  };
+
+  __events__.doGet = function(e) {
+    return ContentService.createTextOutput('ok');
+  };
+}
+
+__defineModule__(_main, true);`;
+      const result = validate('Triggers.gs', src);
+      assert.ok(result.valid, `Expected valid, got errors: ${JSON.stringify(result.errors)}`);
+    });
+  });
+});
