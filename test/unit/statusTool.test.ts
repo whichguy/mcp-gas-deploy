@@ -53,7 +53,7 @@ describe('handleStatusTool', () => {
         makeFileOps([])
       );
       assert.equal(result.success, false);
-      assert.ok(result.error?.includes('Invalid scriptId'));
+      assert.ok(result.error?.includes('Invalid scriptId'), `got: ${result.error}`);
     });
 
     it('returns error for localDir outside home directory', async () => {
@@ -62,7 +62,7 @@ describe('handleStatusTool', () => {
         makeFileOps([])
       );
       assert.equal(result.success, false);
-      assert.ok(result.error?.includes('home directory'));
+      assert.ok(result.error?.includes('home directory'), `got: ${result.error}`);
     });
   });
 

@@ -73,7 +73,7 @@ describe('deployConfig', () => {
     it('does not leave a .tmp file after successful write', async () => {
       await writeDeployConfig(tmpDir, {});
       const files = await fs.readdir(tmpDir);
-      assert.ok(files.every(f => !f.endsWith('.tmp')));
+      assert.ok(files.every(f => !f.endsWith('.tmp')), `unexpected .tmp file(s) left: ${files.filter(f => f.endsWith('.tmp')).join(', ')}`);
     });
 
     it('round-trips: write then read returns the same config', async () => {
