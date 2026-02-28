@@ -67,7 +67,7 @@ export async function handleStatusTool(
     ? path.resolve(localDir)
     : path.join(os.homedir(), 'gas-projects', scriptId);
 
-  if (localDir && !resolvedDir.startsWith(os.homedir())) {
+  if (localDir && !resolvedDir.startsWith(os.homedir() + path.sep)) {
     return {
       success: false,
       summary: '',

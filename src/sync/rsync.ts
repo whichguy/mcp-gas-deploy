@@ -204,16 +204,20 @@ export async function pull(
     // One-time cleanup: remove orphaned state file from pre-simplification versions.
     try { await fs.unlink(path.join(localDir, '.gas-sync-state.json')); } catch { /* ENOENT is fine */ }
 
-    // Auto-init git if not already
+    // Auto-init git if not already (best-effort — failure does not fail the pull)
     try {
       await fs.access(path.join(localDir, '.git'));
     } catch {
-      const { execFile } = await import('node:child_process');
-      const { promisify } = await import('node:util');
-      const execFileAsync = promisify(execFile);
-      await execFileAsync('git', ['init', '-b', 'main'], { cwd: localDir });
-      await execFileAsync('git', ['add', '-A'], { cwd: localDir });
-      await execFileAsync('git', ['commit', '-m', 'Initial pull from GAS'], { cwd: localDir });
+      try {
+        const { execFile } = await import('node:child_process');
+        const { promisify } = await import('node:util');
+        const execFileAsync = promisify(execFile);
+        await execFileAsync('git', ['init', '-b', 'main'], { cwd: localDir });
+        await execFileAsync('git', ['add', '-A'], { cwd: localDir });
+        await execFileAsync('git', ['commit', '-m', 'Initial pull from GAS'], { cwd: localDir });
+      } catch {
+        /* git not available or init failed — non-fatal, files are already written */
+      }
     }
 
     return { success: true, filesPulled: pulled };

@@ -120,7 +120,7 @@ export async function handleDeployTool(
     ? path.resolve(localDir)
     : path.join(os.homedir(), 'gas-projects', scriptId);
 
-  if (localDir && !resolvedDir.startsWith(os.homedir())) {
+  if (localDir && !resolvedDir.startsWith(os.homedir() + path.sep)) {
     return {
       success: false, environment: to,
       error: 'localDir must resolve within your home directory',

@@ -111,11 +111,20 @@ export async function handleExecTool(
     };
   }
 
+  // Validate moduleName to prevent JS injection via unescaped single quotes in the exec statement
+  if (moduleName !== undefined && !FUNCTION_PATTERN.test(moduleName)) {
+    return {
+      success: false,
+      error: 'Invalid module name',
+      hints: { fix: 'Module name must be a valid JavaScript identifier (no slashes or quotes)' },
+    };
+  }
+
   const resolvedDir = localDir
     ? path.resolve(localDir)
     : path.join(os.homedir(), 'gas-projects', scriptId);
 
-  if (localDir && !resolvedDir.startsWith(os.homedir())) {
+  if (localDir && !resolvedDir.startsWith(os.homedir() + path.sep)) {
     return {
       success: false,
       error: 'localDir must resolve within your home directory',
@@ -280,7 +289,7 @@ export async function handleExecTool(
 
     return {
       success: true,
-      result: data.result ?? data,
+      result: data.result,
       logs: data.logger_output,
       filesSync,
       hints: {
