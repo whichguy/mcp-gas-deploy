@@ -27,7 +27,9 @@ export const STATUS_TOOL_DEFINITION = {
   name: 'status',
   description: `Compare local .gs files vs remote GAS project using Git SHA-1 hashes.
 
-Shows which files are in sync, which are ahead locally, and which have remote changes.`,
+Shows which files are in sync, ahead locally, or changed remotely.
+Local-ahead files will be CommonJS-validated on next push:
+  function _main() { exports.myFn = ...; }  __defineModule__(_main, false);`,
   inputSchema: {
     type: 'object' as const,
     properties: {
@@ -85,7 +87,7 @@ export async function handleStatusTool(
     const summary = parts.length > 0 ? parts.join(', ') : 'No files found';
 
     const hints: Record<string, string> = {
-      commonjs: 'Remember: all code inside `function _main()`, call `__defineModule__(_main, false)` at end',
+      commonjs: 'GAS CommonJS: function _main(){ exports.fn=function(){...}; } __defineModule__(_main,false);',
     };
 
     if (status.localAhead.length > 0) {

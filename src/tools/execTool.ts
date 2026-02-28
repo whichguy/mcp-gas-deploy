@@ -41,7 +41,8 @@ export const EXEC_TOOL_DEFINITION = {
   description: `Execute a GAS function via web app deployment URL. Auto-pushes if local is ahead of remote.
 
 Requires a web app deployment — run \`deploy\` first if none exists.
-If local files are ahead, validates and pushes them before executing.`,
+The function MUST be exported inside _main(): exports.myFn = function() { ... }
+Auto-push validates CommonJS structure before pushing.`,
   inputSchema: {
     type: 'object' as const,
     properties: {
@@ -55,7 +56,7 @@ If local files are ahead, validates and pushes them before executing.`,
       },
       function: {
         type: 'string',
-        description: 'Function name to execute',
+        description: 'Function name to execute — must be exported inside _main(): exports.<function> = function() {...}',
       },
       args: {
         type: 'array',
@@ -140,7 +141,7 @@ export async function handleExecTool(
         error: 'Remote has changes not in your local copy — run `pull` first to merge, then retry',
         hints: {
           fix: 'Your local and remote have diverged. Pull remote changes first.',
-          commonjs: 'Remember: all code inside `function _main()`, call `__defineModule__(_main, false)` at end',
+          commonjs: 'GAS CommonJS: function _main(){ exports.fn=function(){...}; } __defineModule__(_main,false);',
         },
       };
     }
@@ -158,7 +159,7 @@ export async function handleExecTool(
             fix: pushResult.validationErrors
               ? 'Fix the validation errors, then retry exec'
               : 'Check authentication and network, then retry',
-            commonjs: 'Remember: all code inside `function _main()`, call `__defineModule__(_main, false)` at end',
+            commonjs: 'GAS CommonJS: function _main(){ exports.fn=function(){...}; } __defineModule__(_main,false);',
           },
         };
       }
@@ -206,7 +207,10 @@ export async function handleExecTool(
       return {
         success: false, syncedBeforeExec, filesSync,
         error: `Execution failed (HTTP ${response.status}): ${text}`,
-        hints: { fix: 'Check the function name and deployment configuration' },
+        hints: {
+          fix: 'Check the function name and deployment configuration',
+          exports: 'Function must be exported inside _main(): exports.myFn = function(){...} — bare function declarations are NOT callable via exec',
+        },
       };
     }
 
@@ -222,7 +226,7 @@ export async function handleExecTool(
         next: syncedBeforeExec
           ? `Function executed. ${filesSync} files synced before execution. Local and remote are in sync.`
           : 'Function executed. Local and remote are in sync.',
-        commonjs: 'Remember: all code inside `function _main()`, call `__defineModule__(_main, false)` at end',
+        commonjs: 'GAS CommonJS: function _main(){ exports.fn=function(){...}; } __defineModule__(_main,false);',
       },
     };
   } catch (error: unknown) {

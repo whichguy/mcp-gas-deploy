@@ -28,8 +28,10 @@ export const PULL_TOOL_DEFINITION = {
   name: 'pull',
   description: `Fetch all files from a GAS project to a local directory. Auto-initializes git.
 
-Files are written AS-IS from GAS — CommonJS module wrappers are preserved.
-The LLM sees and edits the raw CommonJS pattern directly.`,
+Files are written AS-IS. All .gs files use this CommonJS pattern — preserve it when editing:
+  function _main() { const dep = require('module'); exports.myFn = function(){}; }
+  __defineModule__(_main, false); // false=lazy; true=eager for doGet/onOpen trigger files
+require.gs MUST be the first file (position 0) in the project.`,
   inputSchema: {
     type: 'object' as const,
     properties: {
@@ -91,7 +93,7 @@ export async function handlePullTool(
       localDir: resolvedDir,
       hints: {
         next: `Run pull without dryRun to write ${remoteFiles.length} files to ${resolvedDir}`,
-        commonjs: 'Remember: all code inside `function _main()`, call `__defineModule__(_main, false)` at end',
+        commonjs: 'GAS CommonJS: function _main(){ exports.fn=function(){...}; } __defineModule__(_main,false);',
       },
     };
   }

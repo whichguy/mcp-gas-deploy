@@ -67,7 +67,7 @@ Only pushes files where local hash ≠ remote hash (efficient).`,
       },
       skipValidation: {
         type: 'boolean',
-        description: 'Skip CommonJS validation (use with caution)',
+        description: 'Skip CommonJS validation — only for system files (e.g. require.gs) that intentionally differ from the module pattern',
       },
     },
     required: ['scriptId'],
@@ -116,7 +116,7 @@ export async function handlePushTool(
         error: result.error,
         hints: {
           fix: 'Fix the validation errors above, then re-run push',
-          commonjs: 'All code must be inside `function _main() { ... }` with `__defineModule__(_main, false)` at end',
+          commonjs: 'GAS CommonJS: function _main(){ exports.fn=function(){...}; } __defineModule__(_main,false);',
           triggers: 'Trigger files (doGet, onOpen) need `__events__.X = ...` inside _main() and `__defineModule__(_main, true)`',
         },
       };
@@ -136,7 +136,7 @@ export async function handlePushTool(
       filesPushed: [],
       hints: {
         next: 'All files are already in sync. No push needed.',
-        commonjs: 'Remember: all code inside `function _main()`, call `__defineModule__(_main, false)` at end',
+        commonjs: 'GAS CommonJS: function _main(){ exports.fn=function(){...}; } __defineModule__(_main,false);',
       },
     };
   }

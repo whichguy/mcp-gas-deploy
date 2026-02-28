@@ -192,7 +192,7 @@ export async function handleDeployTool(
         next: webAppUrl
           ? `Deployed to ${to} (v${version.versionNumber}). URL: ${webAppUrl}. Run \`exec\` to verify.`
           : `Version ${version.versionNumber} deployed to ${to}. Deployment ID: ${deploymentId}.`,
-        commonjs: 'Remember: all code inside `function _main()`, call `__defineModule__(_main, false)` at end',
+        commonjs: 'GAS CommonJS: function _main(){ exports.fn=function(){...}; } __defineModule__(_main,false);',
       },
     };
   } catch (error: unknown) {
