@@ -297,5 +297,41 @@ __defineModule__(_main, true);`;
       const result = validate('Triggers.gs', src);
       assert.ok(result.valid, `Expected valid, got errors: ${JSON.stringify(result.errors)}`);
     });
+
+    it('passes a module with multi-line _main signature containing () => {}', () => {
+      // Real mcp_gas module pattern: default params include `() => {}` which
+      // contains braces inside the parameter list — must not confuse brace counting.
+      const src = `function _main(
+  module = globalThis.__getCurrentModule(),
+  exports = module.exports,
+  log = globalThis.__getModuleLogFunction?.(module) || (() => {})
+) {
+  const hello = require('hello');
+  exports.greet = hello.greet;
+  exports.runTests = function() { return 'ok'; };
+}
+
+__defineModule__(_main, false);`;
+      const result = validate('runner-api.gs', src);
+      assert.ok(result.valid, `Expected valid, got errors: ${JSON.stringify(result.errors)}`);
+    });
+
+    it('passes a trigger module with multi-line _main signature', () => {
+      const src = `function _main(
+  module = globalThis.__getCurrentModule(),
+  exports = module.exports,
+  log = globalThis.__getModuleLogFunction?.(module) || (() => {})
+) {
+  __events__.doPost = function(e) {
+    const body = JSON.parse(e.postData.contents);
+    const api = require('runner-api');
+    return ContentService.createTextOutput(JSON.stringify({ result: api[body.function]() }));
+  };
+}
+
+__defineModule__(_main, true);`;
+      const result = validate('dispatcher.gs', src);
+      assert.ok(result.valid, `Expected valid, got errors: ${JSON.stringify(result.errors)}`);
+    });
   });
 });

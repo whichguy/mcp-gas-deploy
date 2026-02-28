@@ -114,6 +114,71 @@ export class GASDeployOperations {
   }
 
   /**
+   * Find an existing HEAD deployment (versionNumber = 0) or create one.
+   *
+   * HEAD deployments serve the current HEAD revision at a /dev URL and are
+   * required for ?_mcp_run=true exec. Versioned /exec deployments redirect
+   * back to /exec even if you append /dev to the URL.
+   */
+  async getOrCreateHeadDeployment(
+    scriptId: string,
+    description = 'mcp-gas-deploy HEAD'
+  ): Promise<GASDeployment> {
+    const deployments = await this.listDeployments(scriptId);
+
+    for (const d of deployments) {
+      // HEAD deployments have versionNumber === 0 in deploymentConfig (no pinned version)
+      const vn = d.deploymentConfig?.versionNumber ?? d.versionNumber;
+      if (!vn) {
+        let webAppUrl = d.webAppUrl;
+        if (!webAppUrl && d.entryPoints) {
+          const ep = d.entryPoints.find((e) => e.entryPointType === 'WEB_APP');
+          webAppUrl = ep?.webApp?.url ?? undefined;
+        }
+        if (webAppUrl) {
+          console.error(`getOrCreateHeadDeployment: found existing HEAD ${d.deploymentId}`);
+          return { ...d, webAppUrl };
+        }
+      }
+    }
+
+    // No HEAD deployment found — create one (omit versionNumber for HEAD)
+    return this.authOps.makeAuthenticatedRequest(async (scriptApi) => {
+      console.error(`getOrCreateHeadDeployment: creating HEAD deployment for ${scriptId}`);
+
+      const response = await scriptApi.projects.deployments.create({
+        scriptId,
+        requestBody: {
+          description,
+          manifestFileName: 'appsscript',
+        },
+      });
+
+      let webAppUrl: string | undefined;
+      if (response.data.entryPoints) {
+        const webApp = (response.data.entryPoints as Array<{
+          entryPointType: string;
+          webApp?: { url?: string };
+        }>).find((ep) => ep.entryPointType === 'WEB_APP');
+        webAppUrl = webApp?.webApp?.url ?? undefined;
+      }
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const raw = response.data as any;
+      console.error(`getOrCreateHeadDeployment: created ${raw.deploymentId}, url=${webAppUrl}`);
+
+      return {
+        deploymentId: raw.deploymentId ?? '',
+        versionNumber: 0,
+        description: raw.description ?? undefined,
+        manifestFileName: raw.manifestFileName ?? undefined,
+        updateTime: raw.updateTime ?? undefined,
+        webAppUrl,
+      };
+    });
+  }
+
+  /**
    * Create a new deployment pinned to the given version.
    */
   async createDeployment(

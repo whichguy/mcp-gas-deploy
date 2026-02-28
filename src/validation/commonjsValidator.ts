@@ -57,11 +57,13 @@ function findLineNumber(source: string, pattern: RegExp): number | undefined {
 /**
  * Find the range of the _main() function body.
  * Returns [startLine, endLine] (1-based) or null if not found.
- * Uses brace counting — accurate for well-formed files.
+ *
+ * Two-phase approach:
+ *   Phase 1 — skip parameter list using paren tracking (handles `() => {}` in defaults).
+ *   Phase 2 — count body braces from the opening `{` to find the closing `}`.
  */
 function findMainFunctionRange(source: string): [number, number] | null {
   const lines = source.split('\n');
-  // Match `function _main()` at the start of a line (with optional whitespace)
   const mainPattern = /^\s*function\s+_main\s*\(/;
   let startLine = -1;
 
@@ -74,19 +76,37 @@ function findMainFunctionRange(source: string): [number, number] | null {
 
   if (startLine === -1) return null;
 
-  // Count braces from the line with `function _main(`
-  let depth = 0;
-  let foundOpen = false;
-  for (let i = startLine; i < lines.length; i++) {
+  // Phase 1: track parens to find where the parameter list ends,
+  // then the first `{` after that is the function body opener.
+  let parenDepth = 0;
+  let paramListClosed = false;
+  let bodyStartLine = -1;
+
+  for (let i = startLine; i < lines.length && bodyStartLine === -1; i++) {
     for (const ch of lines[i]) {
-      if (ch === '{') {
-        depth++;
-        foundOpen = true;
-      } else if (ch === '}') {
-        depth--;
-        if (foundOpen && depth === 0) {
-          return [startLine + 1, i + 1]; // 1-based
+      if (!paramListClosed) {
+        if (ch === '(') parenDepth++;
+        else if (ch === ')') {
+          parenDepth--;
+          if (parenDepth === 0) paramListClosed = true;
         }
+      } else {
+        // Parameter list closed — next `{` is the body
+        if (ch === '{') { bodyStartLine = i; break; }
+      }
+    }
+  }
+
+  if (bodyStartLine === -1) return null;
+
+  // Phase 2: count braces to find the closing `}` of the body.
+  let depth = 0;
+  for (let i = bodyStartLine; i < lines.length; i++) {
+    for (const ch of lines[i]) {
+      if (ch === '{') depth++;
+      else if (ch === '}') {
+        depth--;
+        if (depth === 0) return [startLine + 1, i + 1]; // 1-based
       }
     }
   }

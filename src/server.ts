@@ -92,7 +92,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'exec': {
-        const result = await handleExecTool(args as unknown as Parameters<typeof handleExecTool>[0], fileOps, sessionManager);
+        const result = await handleExecTool(args as unknown as Parameters<typeof handleExecTool>[0], fileOps, sessionManager, deployOps);
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       }
 
