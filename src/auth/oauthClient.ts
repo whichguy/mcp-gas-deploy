@@ -74,7 +74,7 @@ export class OAuthClient {
 
       const authUrl = this.oauth2Client.generateAuthUrl({
         access_type: 'offline',
-        scope: this.config.scopes.length > 0 ? this.config.scopes : GAS_SCOPES,
+        scope: this.config.scopes,
         code_challenge: pkce.codeChallenge,
         code_challenge_method: 'S256' as any, // google-auth-library CodeChallengeMethod enum vs string literal
         state: this.state,
@@ -140,6 +140,9 @@ export class OAuthClient {
             res.writeHead(404).end();
           } else if (!req.url?.startsWith('/callback')) {
             res.writeHead(404).end('Not found');
+          } else {
+            // resolved=true, late /callback — send 200 to avoid connection hang
+            res.writeHead(200).end();
           }
           return;
         }

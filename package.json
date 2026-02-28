@@ -11,14 +11,15 @@
     "start": "npm run build && node dist/server.js",
     "clean": "rm -rf dist/",
     "lint": "eslint src/",
-    "test": "mocha 'test/**/*.test.ts' --timeout 30000",
-    "test:unit": "mocha 'test/unit/**/*.test.ts' --timeout 15000"
+    "test": "node --import tsx node_modules/.bin/mocha 'test/**/*.test.ts' --timeout 30000",
+    "test:unit": "node --import tsx node_modules/.bin/mocha 'test/unit/**/*.test.ts' --timeout 15000"
   },
   "engines": {
     "node": ">=18"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
+    "google-auth-library": "^10.6.1",
     "googleapis": "^140.0.0",
     "open": "^11.0.0"
   },

@@ -16,8 +16,7 @@ import {
   setDeploymentInfo,
   type DeploymentInfo,
 } from '../config/deployConfig.js';
-
-const SCRIPT_ID_PATTERN = /^[A-Za-z0-9_-]{20,}$/;
+import { SCRIPT_ID_PATTERN } from '../utils/validation.js';
 
 export interface DeployToolParams {
   scriptId: string;

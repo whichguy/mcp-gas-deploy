@@ -5,7 +5,7 @@
  * Replaces client_secret with dynamically generated code_verifier/code_challenge pairs.
  */
 
-import { randomBytes, createHash } from 'crypto';
+import { randomBytes, createHash } from 'node:crypto';
 
 export interface PKCEChallenge {
   codeVerifier: string;

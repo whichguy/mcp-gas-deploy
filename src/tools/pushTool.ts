@@ -15,8 +15,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { GASFileOperations } from '../api/gasFileOperations.js';
 import { push } from '../sync/rsync.js';
-
-const SCRIPT_ID_PATTERN = /^[A-Za-z0-9_-]{20,}$/;
+import { SCRIPT_ID_PATTERN } from '../utils/validation.js';
 
 export interface PushToolParams {
   scriptId: string;

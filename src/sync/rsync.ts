@@ -6,6 +6,7 @@
  *
  * Navigation comments mark the key decision points:
  * - HASH_MISMATCH: where local vs remote divergence is detected
+ * - SYNC_STATE: where pull direction is tracked via .gas-sync-state.json
  * - AUTO_PUSH: where push is triggered before exec
  * - LOCK_GUARD: where concurrent push protection applies
  */
@@ -16,6 +17,11 @@ import { gitBlobSha1 } from './hashUtils.js';
 import { GASFileOperations } from '../api/gasFileOperations.js';
 import { validateFilesErrors, type ValidationResult } from '../validation/commonjsValidator.js';
 import type { GASFile } from '../api/gasTypes.js';
+
+// --- Constants ---
+
+/** Operational state file — tracks remote hashes at last pull for directional status. */
+const SYNC_STATE_FILE = '.gas-sync-state.json';
 
 // --- Types ---
 
@@ -68,6 +74,60 @@ async function withPushLock<T>(scriptId: string, fn: () => Promise<T>): Promise<
   }
 }
 
+// --- Sync state helpers ---
+
+/**
+ * SYNC_STATE: Read remote hashes recorded at last pull.
+ * Returns null if state file is absent (first pull not done) or corrupt.
+ */
+async function readSyncState(localDir: string): Promise<Map<string, string> | null> {
+  const statePath = path.join(localDir, SYNC_STATE_FILE);
+  try {
+    const content = await fs.readFile(statePath, 'utf-8');
+    const parsed = JSON.parse(content) as Record<string, string>;
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      console.error(`[rsync] Corrupt sync state at ${statePath} — ignoring`);
+      return null;
+    }
+    return new Map(Object.entries(parsed));
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    console.error(`[rsync] Error reading sync state: ${(error as Error).message}`);
+    return null;
+  }
+}
+
+/**
+ * SYNC_STATE: Write remote hashes atomically (tmp + rename). Non-throwing.
+ * Failure degrades remoteAhead detection but does not fail the pull.
+ */
+async function writeSyncState(localDir: string, hashes: Map<string, string>): Promise<void> {
+  const statePath = path.join(localDir, SYNC_STATE_FILE);
+  const tempPath = `${statePath}.tmp`;
+  try {
+    await fs.writeFile(tempPath, JSON.stringify(Object.fromEntries(hashes), null, 2), 'utf-8');
+    await fs.rename(tempPath, statePath);
+  } catch (error: unknown) {
+    console.error(`[rsync] Failed to write sync state: ${(error as Error).message}`);
+    try { await fs.unlink(tempPath); } catch { /* ignore */ }
+  }
+}
+
+/** Ensure SYNC_STATE_FILE is listed in .gitignore (operational data, not source). */
+async function ensureSyncStateGitignored(localDir: string): Promise<void> {
+  const gitignorePath = path.join(localDir, '.gitignore');
+  try {
+    let content = '';
+    try { content = await fs.readFile(gitignorePath, 'utf-8'); } catch { /* will create */ }
+    if (!content.includes(SYNC_STATE_FILE)) {
+      const prefix = content.length > 0 && !content.endsWith('\n') ? '\n' : '';
+      await fs.writeFile(gitignorePath, `${content}${prefix}${SYNC_STATE_FILE}\n`, 'utf-8');
+    }
+  } catch (error: unknown) {
+    console.error(`[rsync] Failed to update .gitignore: ${(error as Error).message}`);
+  }
+}
+
 // --- Helpers ---
 
 /** Get the file extension for a GAS file type */
@@ -100,6 +160,7 @@ async function readLocalFiles(localDir: string): Promise<Map<string, { source: s
   for (const entry of entries) {
     if (!entry.endsWith('.gs') && !entry.endsWith('.html') && !entry.endsWith('.json')) continue;
     if (entry === 'gas-deploy.json') continue; // skip our config file
+    if (entry === SYNC_STATE_FILE) continue;   // skip operational state file
 
     const source = await fs.readFile(path.join(localDir, entry), 'utf-8');
     const name = stripExtension(entry);
@@ -113,7 +174,11 @@ async function readLocalFiles(localDir: string): Promise<Map<string, { source: s
 
 /**
  * HASH_MISMATCH: Compare local files vs remote files using Git SHA-1 hashes.
- * Files are matched by name (without extension).
+ * Uses sync state (recorded at last pull) to determine change direction:
+ *   - localAhead:  local changed since pull (needs push)
+ *   - remoteAhead: remote changed since pull (needs pull)
+ *   - both non-empty: diverged — callers check localAhead && remoteAhead to halt
+ * Without state (no pull yet): all hash diffs treated as localAhead (safe fallback).
  */
 export async function getStatus(
   scriptId: string,
@@ -146,6 +211,9 @@ export async function getStatus(
 
   const localFiles = await readLocalFiles(localDir);
 
+  // SYNC_STATE: Load last pull state for directional comparison
+  const state = await readSyncState(localDir);
+
   const inSync: FileStatus[] = [];
   const localAhead: FileStatus[] = [];
   const remoteAhead: FileStatus[] = [];
@@ -166,8 +234,21 @@ export async function getStatus(
 
     if (localHash === remoteHash) {
       inSync.push({ name, localHash, remoteHash });
+      remoteMap.delete(name);
+      continue;
+    }
+
+    // HASH_MISMATCH: local and remote differ — use state to determine direction
+    if (state !== null) {
+      const stateHash = state.get(name);
+      const localChanged = localHash !== stateHash;   // local modified since last pull
+      const remoteChanged = remoteHash !== stateHash; // remote modified since last pull
+
+      if (localChanged) localAhead.push({ name, localHash, remoteHash });
+      if (remoteChanged) remoteAhead.push({ name, remoteHash, localHash });
+      // Both changed → diverged — divergence guard in callers fires on localAhead && remoteAhead
     } else {
-      // HASH_MISMATCH: local and remote differ
+      // No state file (first pull not done) — fall back: all diffs → localAhead
       localAhead.push({ name, localHash, remoteHash });
     }
 
@@ -185,6 +266,7 @@ export async function getStatus(
 /**
  * Pull all files from GAS to local directory.
  * Creates the directory if it doesn't exist. Writes files AS-IS.
+ * Records remote hashes in SYNC_STATE_FILE to enable directional status tracking.
  */
 export async function pull(
   scriptId: string,
@@ -203,6 +285,12 @@ export async function pull(
       await fs.writeFile(path.join(localDir, filename), file.source ?? '', 'utf-8');
       pulled.push(filename);
     }
+
+    // SYNC_STATE: Record remote hashes so getStatus can detect change direction.
+    // writeSyncState is non-throwing — failure degrades remoteAhead detection only.
+    const remoteHashes = new Map(remoteFiles.map(f => [f.name, gitBlobSha1(f.source ?? '')]));
+    await writeSyncState(localDir, remoteHashes);
+    await ensureSyncStateGitignored(localDir);
 
     // Auto-init git if not already
     try {

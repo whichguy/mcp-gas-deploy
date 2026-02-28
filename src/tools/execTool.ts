@@ -12,13 +12,11 @@ import path from 'node:path';
 import os from 'node:os';
 import { promises as fs } from 'node:fs';
 import { GASFileOperations } from '../api/gasFileOperations.js';
-import { getStatus } from '../sync/rsync.js';
-import { push } from '../sync/rsync.js';
+import { getStatus, push } from '../sync/rsync.js';
 import { getDeploymentInfo } from '../config/deployConfig.js';
 import { SessionManager } from '../auth/sessionManager.js';
-
-const SCRIPT_ID_PATTERN = /^[A-Za-z0-9_-]{20,}$/;
-const FUNCTION_PATTERN = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+import { SCRIPT_ID_PATTERN, FUNCTION_PATTERN } from '../utils/validation.js';
+import type { ValidationResult } from '../validation/commonjsValidator.js';
 
 export interface ExecToolParams {
   scriptId: string;
@@ -34,6 +32,7 @@ export interface ExecToolResult {
   syncedBeforeExec: boolean;
   filesSync?: number;
   error?: string;
+  validationErrors?: ValidationResult[];
   hints: Record<string, string>;
 }
 
@@ -161,7 +160,7 @@ export async function handleExecTool(
               : 'Check authentication and network, then retry',
             commonjs: 'Remember: all code inside `function _main()`, call `__defineModule__(_main, false)` at end',
           },
-        } as ExecToolResult & { validationErrors?: unknown };
+        };
       }
 
       syncedBeforeExec = true;

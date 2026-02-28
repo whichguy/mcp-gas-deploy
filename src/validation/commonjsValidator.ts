@@ -283,11 +283,8 @@ export function validateFiles(
     const baseName = file.name.replace(/\.gs$/, '');
     if (SKIP_FILES.has(baseName) || SKIP_FILES.has(file.name)) continue;
 
-    // Only validate .gs files (skip .html, .json)
-    if (!file.name.endsWith('.gs') && !file.name.match(/^[^.]+$/)) {
-      // Files without extension are treated as .gs (GAS convention)
-      if (file.name.includes('.')) continue;
-    }
+    // Only validate .gs files and extension-less files (GAS convention)
+    if (file.name.includes('.') && !file.name.endsWith('.gs')) continue;
 
     const errors: ValidationError[] = [
       ...checkMissingMain(file.source, file.name),
