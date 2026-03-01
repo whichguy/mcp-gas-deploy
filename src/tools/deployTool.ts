@@ -22,6 +22,7 @@ import {
   type DeploymentInfo,
 } from '../config/deployConfig.js';
 import { SCRIPT_ID_PATTERN } from '../utils/validation.js';
+import { generateShimCode, validateUserSymbol, buildConsumerManifest } from '../utils/consumerShim.js';
 
 /** Default web app manifest config — applied when deploying a project with no webapp section. */
 const DEFAULT_WEBAPP_CONFIG = {
@@ -148,6 +149,59 @@ Pre-deploy: validates CommonJS, pushes all local files. Stores deployment URL fo
 
 // 48h — arbitrary but conservative; adjust if prod/staging cadence differs
 const STALE_THRESHOLD_MS = 48 * 60 * 60 * 1000;
+
+/**
+ * Push shim code + updated manifest to a consumer project, create a version,
+ * and optionally update its deployment.
+ *
+ * Non-fatal by design — caller wraps this in try/catch so consumer errors
+ * never fail the source deploy.
+ */
+async function updateConsumerShim(
+  scriptId: string,
+  consumerScriptId: string,
+  consumerDeploymentId: string | undefined,
+  description: string,
+  fileOps: GASFileOperations,
+  deployOps: GASDeployOperations,
+  userSymbol: string
+): Promise<{ versionNumber: number; deploymentUpdated: boolean }> {
+  // Read source manifest — use empty fallback so consumer shim still builds
+  let oauthScopes: string[] | undefined;
+  let timeZone: string | undefined;
+  try {
+    const files = await fileOps.getProjectFiles(scriptId);
+    const manifestFile = files.find((f) => f.name === 'appsscript');
+    if (manifestFile?.source) {
+      const parsed = JSON.parse(manifestFile.source) as Record<string, unknown>;
+      oauthScopes = Array.isArray(parsed.oauthScopes) ? (parsed.oauthScopes as string[]) : undefined;
+      timeZone = typeof parsed.timeZone === 'string' ? parsed.timeZone : undefined;
+    }
+  } catch {
+    // non-fatal: use empty manifest — consumer manifest will have no oauthScopes/timeZone
+  }
+
+  const shimCode = generateShimCode(userSymbol);
+  const consumerManifest = buildConsumerManifest(scriptId, userSymbol, oauthScopes, timeZone);
+
+  // Push shim code + manifest to consumer project
+  await fileOps.updateProjectFiles(consumerScriptId, [
+    { name: 'appsscript', source: JSON.stringify(consumerManifest, null, 2), type: 'JSON' },
+    { name: 'Code', source: shimCode, type: 'SERVER_JS' },
+  ]);
+
+  // Create consumer version snapshot
+  const consumerVersion = await deployOps.createVersion(consumerScriptId, description);
+  const consumerVersionNumber = consumerVersion.versionNumber;
+
+  let deploymentUpdated = false;
+  if (consumerDeploymentId) {
+    await deployOps.updateDeployment(consumerScriptId, consumerDeploymentId, consumerVersionNumber);
+    deploymentUpdated = true;
+  }
+
+  return { versionNumber: consumerVersionNumber, deploymentUpdated };
+}
 
 export async function handleDeployTool(
   params: DeployToolParams,
@@ -511,7 +565,7 @@ export async function handleDeployTool(
 
     void prevStagingDeployedAt; // used only as pre-write capture; no hint needed when deploying to prod
 
-    return {
+    const response: DeployToolResult = {
       success: true,
       action: 'deploy',
       environment: to,
@@ -520,6 +574,33 @@ export async function handleDeployTool(
       webAppUrl,
       hints,
     };
+
+    // Consumer shim update — non-fatal: consumer failure must not fail the source deploy
+    const consumerScriptId = deployInfo[to === 'staging' ? 'stagingConsumerScriptId' : 'prodConsumerScriptId'];
+    const userSymbol = deployInfo.userSymbol;
+
+    if (consumerScriptId && userSymbol) {
+      try {
+        validateUserSymbol(userSymbol);
+        const consumerDeploymentId = deployInfo[to === 'staging' ? 'stagingConsumerDeploymentId' : 'prodConsumerDeploymentId'];
+        const consumerResult = await updateConsumerShim(
+          scriptId, consumerScriptId, consumerDeploymentId,
+          description ?? `Deploy to ${to}`,
+          fileOps, deployOps, userSymbol
+        );
+        response.consumerUpdate = {
+          scriptId: consumerScriptId,
+          versionNumber: consumerResult.versionNumber,
+          deploymentUpdated: consumerResult.deploymentUpdated,
+        };
+      } catch (consumerError: unknown) {
+        // non-fatal: consumer failure must not fail the source deploy
+        const msg = consumerError instanceof Error ? consumerError.message : String(consumerError);
+        response.consumerUpdate = { scriptId: consumerScriptId, error: `non-fatal: ${msg}` };
+      }
+    }
+
+    return response;
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
     return {
