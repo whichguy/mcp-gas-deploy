@@ -19,7 +19,7 @@ export interface AuthToolResult {
     email: string;
     name: string;
   };
-  hints?: string[];
+  hints?: Record<string, string>;
   error?: string;
 }
 
@@ -65,10 +65,10 @@ export async function handleAuthTool(
             email: result.user.email,
             name: result.user.name,
           },
-          hints: [
-            'You are now authenticated. You can use deploy tools.',
-            'Tokens are cached to disk and will auto-refresh.',
-          ],
+          hints: {
+            next: 'You are now authenticated. You can use deploy tools.',
+            cache: 'Tokens are cached to disk and will auto-refresh.',
+          },
         };
       }
 
@@ -77,10 +77,10 @@ export async function handleAuthTool(
         action: 'login',
         message: 'Authentication failed',
         error: result.error,
-        hints: [
-          'Ensure oauth-config.json is present in the working directory or ~/.config/mcp-gas/',
-          'Check that the OAuth client has the required scopes enabled.',
-        ],
+        hints: {
+          fix: 'Ensure oauth-config.json is present in the working directory or ~/.config/mcp-gas/',
+          scope: 'Check that the OAuth client has the required scopes enabled.',
+        },
       };
     }
 
@@ -90,7 +90,7 @@ export async function handleAuthTool(
         success: true,
         action: 'logout',
         message: 'Logged out. Local credentials cleared.',
-        hints: ['Run auth with action="login" to authenticate again.'],
+        hints: { next: 'Run auth with action="login" to authenticate again.' },
       };
     }
 
@@ -102,7 +102,7 @@ export async function handleAuthTool(
           success: true,
           action: 'status',
           message: 'Not authenticated',
-          hints: ['Run auth with action="login" to authenticate.'],
+          hints: { next: 'Run auth with action="login" to authenticate.' },
         };
       }
 
@@ -120,8 +120,8 @@ export async function handleAuthTool(
           ? { email: status.user.email, name: status.user.name }
           : undefined,
         hints: status.tokenValid
-          ? ['Token is valid. Deploy tools are available.']
-          : ['Run auth with action="login" to refresh your session.'],
+          ? { next: 'Token is valid. Deploy tools are available.' }
+          : { fix: 'Run auth with action="login" to refresh your session.' },
       };
     }
   }
