@@ -60,16 +60,25 @@ describe('buildConsumerManifest', () => {
     assert.equal(libs[0].libraryId, 'myScriptId');
   });
 
-  it('sets version to "0" (HEAD resolution)', () => {
+  it('sets version to "0" and developmentMode: true when no sourceVersionNumber given (HEAD fallback)', () => {
     const manifest = buildConsumerManifest('myScriptId', 'MyLib') as Record<string, unknown>;
     const libs = (manifest.dependencies as Record<string, unknown[]>).libraries;
     assert.equal(libs[0].version, '0');
+    assert.equal(libs[0].developmentMode, true);
   });
 
-  it('sets developmentMode: true', () => {
-    const manifest = buildConsumerManifest('myScriptId', 'MyLib') as Record<string, unknown>;
+  it('pins to specific version and sets developmentMode: false when sourceVersionNumber provided', () => {
+    const manifest = buildConsumerManifest('myScriptId', 'MyLib', undefined, undefined, 5) as Record<string, unknown>;
     const libs = (manifest.dependencies as Record<string, unknown[]>).libraries;
-    assert.equal(libs[0].developmentMode, true);
+    assert.equal(libs[0].version, '5');
+    assert.equal(libs[0].developmentMode, false);
+  });
+
+  it('converts sourceVersionNumber to string in version field', () => {
+    const manifest = buildConsumerManifest('myScriptId', 'MyLib', undefined, undefined, 42) as Record<string, unknown>;
+    const libs = (manifest.dependencies as Record<string, unknown[]>).libraries;
+    assert.equal(typeof libs[0].version, 'string');
+    assert.equal(libs[0].version, '42');
   });
 
   it('sets userSymbol correctly', () => {

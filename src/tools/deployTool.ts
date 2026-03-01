@@ -163,7 +163,8 @@ async function updateConsumerShim(
   description: string,
   fileOps: GASFileOperations,
   deployOps: GASDeployOperations,
-  userSymbol: string
+  userSymbol: string,
+  sourceVersionNumber: number
 ): Promise<{ versionNumber: number; deploymentUpdated: boolean }> {
   // Read source manifest — use empty fallback so consumer shim still builds
   let oauthScopes: string[] | undefined;
@@ -181,7 +182,9 @@ async function updateConsumerShim(
   }
 
   const shimCode = generateShimCode(userSymbol);
-  const consumerManifest = buildConsumerManifest(scriptId, userSymbol, oauthScopes, timeZone);
+  // Pin consumer to the exact source version just deployed (developmentMode: false)
+  // so it runs against the tested snapshot, not whatever HEAD is at runtime.
+  const consumerManifest = buildConsumerManifest(scriptId, userSymbol, oauthScopes, timeZone, sourceVersionNumber);
 
   // Push shim code + manifest to consumer project
   await fileOps.updateProjectFiles(consumerScriptId, [
@@ -591,7 +594,8 @@ export async function handleDeployTool(
         const consumerResult = await updateConsumerShim(
           scriptId, consumerScriptId, consumerDeploymentId,
           description ?? `Deploy to ${to}`,
-          fileOps, deployOps, userSymbol
+          fileOps, deployOps, userSymbol,
+          version.versionNumber
         );
         response.consumerUpdate = {
           scriptId: consumerScriptId,
