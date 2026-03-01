@@ -5,7 +5,7 @@
  * Forked from mcp_gas GASAuthClient — standalone with no mcp_gas dependencies.
  */
 
-import { OAuth2Client } from 'google-auth-library';
+import { OAuth2Client, CodeChallengeMethod } from 'google-auth-library';
 import http from 'node:http';
 import { URL } from 'node:url';
 import crypto from 'node:crypto';
@@ -20,6 +20,7 @@ const GAS_SCOPES = [
   'https://www.googleapis.com/auth/script.deployments',
   'https://www.googleapis.com/auth/script.webapp.deploy',
   'https://www.googleapis.com/auth/drive.file',
+  'https://www.googleapis.com/auth/drive.readonly', // projects tool: list/search standalone GAS scripts
   'https://www.googleapis.com/auth/userinfo.email',
   'https://www.googleapis.com/auth/userinfo.profile',
 ];
@@ -78,7 +79,7 @@ export class OAuthClient {
         access_type: 'offline',
         scope: this.config.scopes,
         code_challenge: pkce.codeChallenge,
-        code_challenge_method: 'S256' as any, // google-auth-library CodeChallengeMethod enum vs string literal
+        code_challenge_method: CodeChallengeMethod.S256,
         state: this.state,
         redirect_uri: redirectUri,
         prompt: 'consent',

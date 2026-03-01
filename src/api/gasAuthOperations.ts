@@ -6,6 +6,7 @@
  */
 
 import { google } from 'googleapis';
+import { createHash } from 'node:crypto';
 import { SessionManager } from '../auth/sessionManager.js';
 
 /**
@@ -50,7 +51,7 @@ export class GASAuthOperations {
    */
   async getScriptApi(): Promise<ReturnType<typeof google.script>> {
     const token = await this.getAccessToken();
-    const cacheKey = token.substring(0, 20);
+    const cacheKey = createHash('sha256').update(token).digest('hex');
     const cached = this.clientCache.get(cacheKey);
 
     if (cached && Date.now() < cached.expires) {
@@ -76,6 +77,29 @@ export class GASAuthOperations {
   }
 
   /**
+   * Return an authenticated Drive API client.
+   * Creates a new client per call (Drive calls are infrequent — no cache needed).
+   */
+  async getDriveApi(): Promise<ReturnType<typeof google.drive>> {
+    const token = await this.getAccessToken();
+    const auth = new google.auth.OAuth2();
+    auth.setCredentials({ access_token: token });
+    return google.drive({ version: 'v3', auth, timeout: 30000 });
+  }
+
+  /**
+   * Make an authenticated Drive API call with error handling.
+   */
+  async makeDriveRequest<T>(apiCall: (driveApi: ReturnType<typeof google.drive>) => Promise<T>): Promise<T> {
+    const driveApi = await this.getDriveApi();
+    try {
+      return await apiCall(driveApi);
+    } catch (error: unknown) {
+      throw this.wrapError(error);
+    }
+  }
+
+  /**
    * Make an authenticated API call with error handling.
    * On 401, attempts one token refresh then retries.
    */
@@ -93,7 +117,7 @@ export class GASAuthOperations {
         // Evict stale cache entry and retry once with a fresh token
         const token = await this.sessionManager.getValidToken();
         if (token) {
-          const cacheKey = token.substring(0, 20);
+          const cacheKey = createHash('sha256').update(token).digest('hex');
           this.clientCache.delete(cacheKey);
         }
 
