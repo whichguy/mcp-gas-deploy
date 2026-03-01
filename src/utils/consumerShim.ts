@@ -49,10 +49,13 @@ function menuAction2() { return ${userSymbol}.menuAction2(); }
 /**
  * Build consumer appsscript.json content.
  *
- * Always uses developmentMode: true (which causes GAS to resolve HEAD of the library
- * at runtime, ignoring the version field). version "0" is included for clarity but is
- * inert when developmentMode is true. Subsequent source pushes are reflected automatically
- * without a new consumer version.
+ * When sourceVersionNumber is provided (deploy flow), uses developmentMode: false and
+ * the exact source version number so the consumer is pinned to the specific snapshot that
+ * was just deployed. This ensures the consumer runs against the same tested version —
+ * not whatever HEAD happens to be at runtime if someone pushes new source files later.
+ *
+ * When sourceVersionNumber is omitted (e.g. tests or manual use), falls back to
+ * developmentMode: true + version "0" (GAS HEAD resolution — always latest push).
  *
  * oauthScopes and timeZone are copied from the source project's manifest when available.
  */
@@ -60,7 +63,8 @@ export function buildConsumerManifest(
   sourceScriptId: string,
   userSymbol: string,
   oauthScopes?: string[],
-  timeZone?: string
+  timeZone?: string,
+  sourceVersionNumber?: number
 ): object {
   const manifest: Record<string, unknown> = {
     timeZone: timeZone ?? 'America/New_York',
@@ -69,8 +73,9 @@ export function buildConsumerManifest(
         {
           userSymbol,
           libraryId: sourceScriptId,
-          version: '0',
-          developmentMode: true,
+          // Pin to exact deployed version when known; fall back to HEAD (developmentMode: true)
+          version: sourceVersionNumber != null ? String(sourceVersionNumber) : '0',
+          developmentMode: sourceVersionNumber == null,
         },
       ],
     },

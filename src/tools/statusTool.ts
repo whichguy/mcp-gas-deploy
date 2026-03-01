@@ -48,12 +48,23 @@ export interface StatusToolParams {
   localDir?: string;
 }
 
+export interface DeploymentUrls {
+  /** HEAD deployment — always points to the latest push; suffix /dev; used by exec */
+  head?: { url?: string; deploymentId?: string; note: string };
+  /** Staging deployment — pinned to a specific version; suffix /exec; use for testing */
+  staging?: { url?: string; deploymentId?: string; versionNumber?: number; note: string };
+  /** Prod deployment — pinned to a specific version; suffix /exec; live traffic */
+  prod?: { url?: string; deploymentId?: string; versionNumber?: number; note: string };
+}
+
 export interface StatusToolResult {
   success: boolean;
   status?: SyncStatus;
   summary: string;
   error?: string;
   hints: Record<string, string>;
+  /** Known deployment URLs from gas-deploy.json — absent if gas-deploy.json does not exist */
+  deployments?: DeploymentUrls;
 }
 
 export const STATUS_TOOL_DEFINITION = {
@@ -125,16 +136,44 @@ export async function handleStatusTool(
       hints.next = 'in sync';
     }
 
-    // Merge staleness hints (non-fatal — missing gas-deploy.json is not an error)
+    // Merge staleness hints and deployment URLs (non-fatal — missing gas-deploy.json is not an error)
+    let deployments: DeploymentUrls | undefined;
     try {
       const deployInfo = await getDeploymentInfo(resolvedDir, scriptId);
       const hasLocalChanges = status.modified.length > 0 || status.localOnly.length > 0;
       Object.assign(hints, buildStalenessHints(deployInfo, hasLocalChanges));
+
+      // Build deployment URL map — only include tiers that have been configured
+      const urls: DeploymentUrls = {};
+      if (deployInfo.headUrl || deployInfo.headDeploymentId) {
+        urls.head = {
+          url: deployInfo.headUrl,
+          deploymentId: deployInfo.headDeploymentId,
+          note: 'HEAD (/dev) — always latest push; used by exec',
+        };
+      }
+      if (deployInfo.stagingUrl || deployInfo.stagingDeploymentId) {
+        urls.staging = {
+          url: deployInfo.stagingUrl,
+          deploymentId: deployInfo.stagingDeploymentId,
+          versionNumber: deployInfo.stagingVersionNumber,
+          note: `versioned (/exec) — v${deployInfo.stagingVersionNumber ?? '?'}; use this URL for testing`,
+        };
+      }
+      if (deployInfo.prodUrl || deployInfo.prodDeploymentId) {
+        urls.prod = {
+          url: deployInfo.prodUrl,
+          deploymentId: deployInfo.prodDeploymentId,
+          versionNumber: deployInfo.prodVersionNumber,
+          note: `versioned (/exec) — v${deployInfo.prodVersionNumber ?? '?'}; live traffic`,
+        };
+      }
+      if (urls.head || urls.staging || urls.prod) deployments = urls;
     } catch {
-      // Suppress — staleness hints are optional; missing config is not a status error
+      // Suppress — deployment info is optional; missing config is not a status error
     }
 
-    return { success: true, status, summary, hints };
+    return { success: true, status, summary, hints, deployments };
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
     return {

@@ -242,6 +242,71 @@ describe('handleStatusTool', () => {
     });
   });
 
+  // --- Deployment URLs ---
+
+  describe('deployment URLs', () => {
+    it('returns deployments with all three tiers when all are configured', async () => {
+      const fileOps = makeFileOps([]);
+      await writeDeployConfig(tmpDir, {
+        [VALID_SCRIPT_ID]: {
+          headUrl: 'https://script.google.com/macros/s/head/dev',
+          headDeploymentId: 'AKfycbHead',
+          stagingUrl: 'https://script.google.com/macros/s/staging/exec',
+          stagingDeploymentId: 'AKfycbStaging',
+          stagingVersionNumber: 3,
+          prodUrl: 'https://script.google.com/macros/s/prod/exec',
+          prodDeploymentId: 'AKfycbProd',
+          prodVersionNumber: 2,
+        },
+      });
+
+      const result = await handleStatusTool(
+        { scriptId: VALID_SCRIPT_ID, localDir: tmpDir },
+        fileOps
+      );
+
+      assert.equal(result.success, true);
+      assert.ok(result.deployments, 'deployments should be present');
+      assert.equal(result.deployments!.head?.url, 'https://script.google.com/macros/s/head/dev');
+      assert.equal(result.deployments!.staging?.url, 'https://script.google.com/macros/s/staging/exec');
+      assert.equal(result.deployments!.staging?.versionNumber, 3);
+      assert.equal(result.deployments!.prod?.url, 'https://script.google.com/macros/s/prod/exec');
+      assert.equal(result.deployments!.prod?.versionNumber, 2);
+    });
+
+    it('annotates head as /dev and staging/prod as versioned for testing', async () => {
+      const fileOps = makeFileOps([]);
+      await writeDeployConfig(tmpDir, {
+        [VALID_SCRIPT_ID]: {
+          headUrl: 'https://script.google.com/macros/s/head/dev',
+          stagingUrl: 'https://script.google.com/macros/s/staging/exec',
+          stagingVersionNumber: 5,
+        },
+      });
+
+      const result = await handleStatusTool(
+        { scriptId: VALID_SCRIPT_ID, localDir: tmpDir },
+        fileOps
+      );
+
+      assert.ok(result.deployments?.head?.note?.includes('exec'), 'head note should mention exec');
+      assert.ok(result.deployments?.staging?.note?.includes('testing'), 'staging note should mention testing');
+      assert.ok(result.deployments?.staging?.note?.includes('v5'), 'staging note should include version');
+    });
+
+    it('omits deployments field when gas-deploy.json has no URLs configured', async () => {
+      const fileOps = makeFileOps([]);
+      // No gas-deploy.json — deployments should be absent
+      const result = await handleStatusTool(
+        { scriptId: VALID_SCRIPT_ID, localDir: tmpDir },
+        fileOps
+      );
+
+      assert.equal(result.success, true);
+      assert.ok(!result.deployments, 'deployments should be absent when no config exists');
+    });
+  });
+
   // --- Summary formatting ---
 
   describe('summary', () => {
