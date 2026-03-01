@@ -26,12 +26,7 @@ export interface PullToolResult {
 
 export const PULL_TOOL_DEFINITION = {
   name: 'pull',
-  description: `Fetch all files from a GAS project to a local directory. Auto-initializes git.
-
-Files are written AS-IS. All .gs files use this CommonJS pattern — preserve it when editing:
-  function _main() { const dep = require('module'); exports.myFn = function(){}; }
-  __defineModule__(_main, false); // false=lazy; true=eager for doGet/onOpen trigger files
-require.gs MUST be the first file (position 0) in the project.`,
+  description: `Fetch all files from a GAS project to a local directory. Auto-initializes git. Files follow the CommonJS module pattern — see hints in the response for editing guidance.`,
   inputSchema: {
     type: 'object' as const,
     properties: {

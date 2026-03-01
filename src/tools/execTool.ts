@@ -111,6 +111,14 @@ export async function handleExecTool(
     };
   }
 
+  if (functionName.endsWith('_')) {
+    return {
+      success: false,
+      error: `Function "${functionName}" ends with _ — GAS treats trailing-underscore functions as private and they cannot be called externally`,
+      hints: { fix: 'Remove the trailing underscore or rename the function' },
+    };
+  }
+
   // Validate moduleName to prevent JS injection via unescaped single quotes in the exec statement
   if (moduleName !== undefined && !MODULE_NAME_PATTERN.test(moduleName)) {
     return {

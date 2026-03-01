@@ -26,12 +26,7 @@ export interface StatusToolResult {
 
 export const STATUS_TOOL_DEFINITION = {
   name: 'status',
-  description: `Compare local .gs files vs remote GAS project by file name.
-
-Shows which files are local-only, remote-only, or shared.
-exec and push always push all local files before executing.
-GAS CommonJS pattern:
-  function _main() { exports.myFn = ...; }  __defineModule__(_main, false);`,
+  description: `Compare local .gs files vs remote GAS project by name. Shows localOnly, remoteOnly, and shared file counts. exec and push always push all local files.`,
   inputSchema: {
     type: 'object' as const,
     properties: {
