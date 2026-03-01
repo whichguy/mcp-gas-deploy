@@ -1,7 +1,7 @@
 /**
  * Push Tool for mcp-gas-deploy
  *
- * Validates CommonJS structure → compares hashes → pushes changed files to GAS.
+ * Validates CommonJS structure → pushes ALL local files to GAS.
  * This is the CORE tool — local-first deployment.
  *
  * Files must follow the CommonJS pattern:
@@ -48,8 +48,7 @@ Files must follow the CommonJS pattern:
   function _main() { ... }
   __defineModule__(_main, false); // false=lazy, true=eager(triggers)
 
-Validation errors are returned with exact fix suggestions.
-Only pushes files where local hash ≠ remote hash (efficient).`,
+Validation errors are returned with exact fix suggestions.`,
   inputSchema: {
     type: 'object' as const,
     properties: {

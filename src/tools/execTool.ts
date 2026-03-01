@@ -15,7 +15,7 @@ import { GASDeployOperations } from '../api/gasDeployOperations.js';
 import { push } from '../sync/rsync.js';
 import { getDeploymentInfo, setDeploymentInfo } from '../config/deployConfig.js';
 import { SessionManager } from '../auth/sessionManager.js';
-import { SCRIPT_ID_PATTERN, FUNCTION_PATTERN } from '../utils/validation.js';
+import { SCRIPT_ID_PATTERN, FUNCTION_PATTERN, MODULE_NAME_PATTERN } from '../utils/validation.js';
 import type { ValidationResult } from '../validation/commonjsValidator.js';
 
 export interface ExecToolParams {
@@ -112,11 +112,11 @@ export async function handleExecTool(
   }
 
   // Validate moduleName to prevent JS injection via unescaped single quotes in the exec statement
-  if (moduleName !== undefined && !FUNCTION_PATTERN.test(moduleName)) {
+  if (moduleName !== undefined && !MODULE_NAME_PATTERN.test(moduleName)) {
     return {
       success: false,
       error: 'Invalid module name',
-      hints: { fix: 'Module name must be a valid JavaScript identifier (no slashes or quotes)' },
+      hints: { fix: 'Module name must be a valid identifier or path (e.g. "module" or "common-js/module"). No quotes or backticks.' },
     };
   }
 
