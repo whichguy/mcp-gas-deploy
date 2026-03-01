@@ -70,7 +70,7 @@ export async function handlePullTool(
     : path.join(baseDir, scriptId);
 
   // Guard against path traversal via targetDir
-  if (targetDir && !resolvedDir.startsWith(os.homedir())) {
+  if (targetDir && !resolvedDir.startsWith(os.homedir() + path.sep)) {
     return {
       success: false,
       filesPulled: [],
