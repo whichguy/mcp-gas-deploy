@@ -31,7 +31,7 @@ function buildStalenessHints(
   if (stagingAge !== null && prodAge !== null
       && stagingAge < prodAge && prodAge > STALE_THRESHOLD_MS) {
     const h = Math.round(prodAge / (60 * 60 * 1000));
-    hints.staleprod = `prod is ${h}h behind staging (v${info.stagingVersionNumber}) — consider: action=promote from=staging to=prod`;
+    hints.staleprod = `prod is ${h}h behind staging (v${info.stagingVersionNumber ?? '?'}) — consider: action=promote from=staging to=prod`;
   }
 
   // local changes + staging stale
