@@ -12,6 +12,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { handleStatusTool } from '../../src/tools/statusTool.js';
+import { writeDeployConfig } from '../../src/config/deployConfig.js';
 import type { GASFileOperations } from '../../src/api/gasFileOperations.js';
 import type { GASFile } from '../../src/api/gasTypes.js';
 
@@ -131,6 +132,98 @@ describe('handleStatusTool', () => {
 
       assert.equal(result.success, true);
       assert.equal(result.hints.next, 'in sync');
+    });
+
+    // --- Staleness hints ---
+
+    it('emits staleprod hint when prod is >48h behind staging', async () => {
+      await fs.writeFile(path.join(tmpDir, 'main.gs'), '// main', 'utf-8');
+      const fileOps = makeFileOps([gasFile('main', '// main')]);
+
+      const now = Date.now();
+      await writeDeployConfig(tmpDir, {
+        [VALID_SCRIPT_ID]: {
+          stagingVersionNumber: 5,
+          stagingDeployedAt: new Date(now - 2 * 60 * 60 * 1000).toISOString(),  // 2h ago (fresh)
+          prodVersionNumber: 3,
+          prodDeployedAt: new Date(now - 72 * 60 * 60 * 1000).toISOString(),    // 72h ago (stale)
+        },
+      });
+
+      const result = await handleStatusTool(
+        { scriptId: VALID_SCRIPT_ID, localDir: tmpDir },
+        fileOps
+      );
+
+      assert.equal(result.success, true);
+      assert.ok(result.hints.staleprod, `expected staleprod hint, hints: ${JSON.stringify(result.hints)}`);
+      assert.ok(result.hints.staleprod.includes('promote'), `hint should mention promote: ${result.hints.staleprod}`);
+    });
+
+    it('emits staledev hint when local changes present and staging is >48h old', async () => {
+      await fs.writeFile(path.join(tmpDir, 'main.gs'), '// updated locally', 'utf-8');
+      const fileOps = makeFileOps([gasFile('main', '// original on remote')]);
+
+      const now = Date.now();
+      await writeDeployConfig(tmpDir, {
+        [VALID_SCRIPT_ID]: {
+          stagingVersionNumber: 3,
+          stagingDeployedAt: new Date(now - 72 * 60 * 60 * 1000).toISOString(), // 72h ago (stale)
+        },
+      });
+
+      const result = await handleStatusTool(
+        { scriptId: VALID_SCRIPT_ID, localDir: tmpDir },
+        fileOps
+      );
+
+      assert.equal(result.success, true);
+      assert.ok(result.hints.staledev, `expected staledev hint, hints: ${JSON.stringify(result.hints)}`);
+      assert.ok(result.hints.staledev.includes('staging'), `hint should mention staging: ${result.hints.staledev}`);
+    });
+
+    it('omits staleness hints when timestamps are missing', async () => {
+      await fs.writeFile(path.join(tmpDir, 'main.gs'), '// main', 'utf-8');
+      const fileOps = makeFileOps([]);
+
+      // Write config without any timestamps
+      await writeDeployConfig(tmpDir, {
+        [VALID_SCRIPT_ID]: {
+          stagingVersionNumber: 3,
+          prodVersionNumber: 2,
+        },
+      });
+
+      const result = await handleStatusTool(
+        { scriptId: VALID_SCRIPT_ID, localDir: tmpDir },
+        fileOps
+      );
+
+      assert.equal(result.success, true);
+      assert.ok(!result.hints.staleprod, 'should not emit staleprod with no timestamps');
+      assert.ok(!result.hints.staledev, 'should not emit staledev with no timestamps');
+    });
+
+    it('omits staleprod hint when prod is fresher than staging', async () => {
+      const fileOps = makeFileOps([]);
+
+      const now = Date.now();
+      await writeDeployConfig(tmpDir, {
+        [VALID_SCRIPT_ID]: {
+          stagingVersionNumber: 3,
+          stagingDeployedAt: new Date(now - 72 * 60 * 60 * 1000).toISOString(), // 72h ago (old staging)
+          prodVersionNumber: 3,
+          prodDeployedAt: new Date(now - 1 * 60 * 60 * 1000).toISOString(),     // 1h ago (fresh prod)
+        },
+      });
+
+      const result = await handleStatusTool(
+        { scriptId: VALID_SCRIPT_ID, localDir: tmpDir },
+        fileOps
+      );
+
+      assert.equal(result.success, true);
+      assert.ok(!result.hints.staleprod, 'should not emit staleprod when prod is fresher than staging');
     });
 
     it('returns error result when getStatus throws', async () => {
