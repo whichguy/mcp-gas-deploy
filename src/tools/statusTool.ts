@@ -10,6 +10,38 @@ import os from 'node:os';
 import { GASFileOperations } from '../api/gasFileOperations.js';
 import { getStatus, type SyncStatus } from '../sync/rsync.js';
 import { SCRIPT_ID_PATTERN } from '../utils/validation.js';
+import { getDeploymentInfo, type DeploymentInfo } from '../config/deployConfig.js';
+
+const STALE_THRESHOLD_MS = 48 * 60 * 60 * 1000; // 48 hours
+
+function buildStalenessHints(
+  info: DeploymentInfo | undefined,
+  hasLocalChanges: boolean
+): Record<string, string> {
+  const hints: Record<string, string> = {};
+  if (!info) return hints;
+
+  const now = Date.now();
+  const stagingAge = info.stagingDeployedAt
+    ? now - new Date(info.stagingDeployedAt).getTime() : null;
+  const prodAge = info.prodDeployedAt
+    ? now - new Date(info.prodDeployedAt).getTime() : null;
+
+  // prod stale vs staging
+  if (stagingAge !== null && prodAge !== null
+      && stagingAge < prodAge && prodAge > STALE_THRESHOLD_MS) {
+    const h = Math.round(prodAge / (60 * 60 * 1000));
+    hints.staleprod = `prod is ${h}h behind staging (v${info.stagingVersionNumber}) — consider: action=promote from=staging to=prod`;
+  }
+
+  // local changes + staging stale
+  if (hasLocalChanges && stagingAge !== null && stagingAge > STALE_THRESHOLD_MS) {
+    const h = Math.round(stagingAge / (60 * 60 * 1000));
+    hints.staledev = `${h}h since last staging deploy with local changes pending — consider: push then action=deploy to=staging`;
+  }
+
+  return hints;
+}
 
 export interface StatusToolParams {
   scriptId: string;
@@ -91,6 +123,15 @@ export async function handleStatusTool(
       hints.next = 'remote-only files — pull to fetch';
     } else {
       hints.next = 'in sync';
+    }
+
+    // Merge staleness hints (non-fatal — missing gas-deploy.json is not an error)
+    try {
+      const deployInfo = await getDeploymentInfo(resolvedDir, scriptId);
+      const hasLocalChanges = status.modified.length > 0 || status.localOnly.length > 0;
+      Object.assign(hints, buildStalenessHints(deployInfo, hasLocalChanges));
+    } catch {
+      // Suppress — staleness hints are optional; missing config is not a status error
     }
 
     return { success: true, status, summary, hints };

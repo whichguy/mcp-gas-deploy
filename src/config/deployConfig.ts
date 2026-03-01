@@ -18,6 +18,17 @@ export interface DeploymentInfo {
   headUrl?: string;       // HEAD deployment URL (ends in /dev) — used by exec
   headDeploymentId?: string;
   lastDeploy?: string; // ISO timestamp
+
+  // Per-environment timestamps (written on deploy/promote)
+  stagingDeployedAt?: string;           // ISO — set on every deploy/promote to staging
+  prodDeployedAt?: string;              // ISO — set on every deploy/promote to prod
+
+  // Consumer proxy projects (optional — set once in gas-deploy.json; never auto-written by deploy)
+  userSymbol?: string;                  // Library namespace, e.g. "SheetsChat"
+  stagingConsumerScriptId?: string;     // Staging consumer project scriptId
+  stagingConsumerDeploymentId?: string; // Optional: staging consumer web-app deployment ID
+  prodConsumerScriptId?: string;        // Prod consumer project scriptId
+  prodConsumerDeploymentId?: string;    // Optional: prod consumer web-app deployment ID
 }
 
 export interface DeployConfig {

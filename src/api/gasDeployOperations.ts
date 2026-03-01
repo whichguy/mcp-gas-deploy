@@ -207,6 +207,29 @@ export class GASDeployOperations {
   }
 
   /**
+   * Get the versionNumber of an existing deployment.
+   * Throws if the deployment has no pinned versionNumber (HEAD-only deployment).
+   */
+  async getDeploymentVersionNumber(scriptId: string, deploymentId: string): Promise<number> {
+    return this.authOps.makeAuthenticatedRequest(async (scriptApi) => {
+      const response = await scriptApi.projects.deployments.get({ scriptId, deploymentId });
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const raw = response.data as any;
+      const versionNumber: number | undefined = raw.deploymentConfig?.versionNumber;
+
+      if (versionNumber == null || versionNumber === 0) {
+        throw new Error(
+          `getDeploymentVersionNumber: deployment ${deploymentId} has no pinned versionNumber (HEAD-only)`
+        );
+      }
+
+      console.error(`getDeploymentVersionNumber: ${deploymentId} is pinned to v${versionNumber}`);
+      return versionNumber;
+    });
+  }
+
+  /**
    * Create a new deployment pinned to the given version.
    */
   async createDeployment(
