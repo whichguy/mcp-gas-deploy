@@ -85,6 +85,29 @@ describe('deployConfig', () => {
       const result = await readDeployConfig(tmpDir);
       assert.deepEqual(result, config);
     });
+
+    it('round-trips: timestamp and consumer config fields survive write/read', async () => {
+      const config = {
+        scriptId123: {
+          stagingDeploymentId: 'AKfycbStaging',
+          stagingVersionNumber: 5,
+          stagingUrl: 'https://script.google.com/macros/s/staging/exec',
+          stagingDeployedAt: '2026-03-01T12:00:00.000Z',
+          prodDeploymentId: 'AKfycbProd',
+          prodVersionNumber: 5,
+          prodUrl: 'https://script.google.com/macros/s/prod/exec',
+          prodDeployedAt: '2026-03-01T18:00:00.000Z',
+          userSymbol: 'SheetsChat',
+          stagingConsumerScriptId: 'consumerStagingScriptId',
+          stagingConsumerDeploymentId: 'AKfycbConsumerStaging',
+          prodConsumerScriptId: 'consumerProdScriptId',
+          prodConsumerDeploymentId: 'AKfycbConsumerProd',
+        },
+      };
+      await writeDeployConfig(tmpDir, config);
+      const result = await readDeployConfig(tmpDir);
+      assert.deepEqual(result, config);
+    });
   });
 
   // --- getDeploymentInfo ---
@@ -101,6 +124,38 @@ describe('deployConfig', () => {
 
       const info = await getDeploymentInfo(tmpDir, 'scriptX');
       assert.deepEqual(info, config.scriptX);
+    });
+
+    it('returns stagingDeployedAt and prodDeployedAt when present', async () => {
+      const config = {
+        scriptY: {
+          stagingDeployedAt: '2026-03-01T12:00:00.000Z',
+          prodDeployedAt: '2026-02-28T12:00:00.000Z',
+          stagingVersionNumber: 3,
+          prodVersionNumber: 2,
+        },
+      };
+      await writeDeployConfig(tmpDir, config);
+
+      const info = await getDeploymentInfo(tmpDir, 'scriptY');
+      assert.equal(info.stagingDeployedAt, '2026-03-01T12:00:00.000Z');
+      assert.equal(info.prodDeployedAt, '2026-02-28T12:00:00.000Z');
+    });
+
+    it('returns consumer config fields when present', async () => {
+      const config = {
+        scriptZ: {
+          userSymbol: 'MyLib',
+          stagingConsumerScriptId: 'stagingConsumerId',
+          prodConsumerScriptId: 'prodConsumerId',
+        },
+      };
+      await writeDeployConfig(tmpDir, config);
+
+      const info = await getDeploymentInfo(tmpDir, 'scriptZ');
+      assert.equal(info.userSymbol, 'MyLib');
+      assert.equal(info.stagingConsumerScriptId, 'stagingConsumerId');
+      assert.equal(info.prodConsumerScriptId, 'prodConsumerId');
     });
   });
 
