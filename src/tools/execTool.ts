@@ -38,11 +38,13 @@ export interface ExecToolResult {
 
 export const EXEC_TOOL_DEFINITION = {
   name: 'exec',
-  description: `Execute a GAS function via web app deployment URL. Auto-pushes all local files before execution.
+  description: `Execute a GAS function. Auto-pushes all local files first (with CommonJS validation).
 
-Requires a web app deployment — run \`deploy\` first if none exists.
-The function MUST be exported inside _main(): exports.myFn = function() { ... }
-Auto-push validates CommonJS structure before pushing.`,
+Requirements:
+- Web app deployment must exist — run deploy first if none.
+- Function must be exported inside _main(): exports.myFn = function() { ... }
+- module param: use "common-js/<name>" (e.g. "common-js/utils") to target a module directly.
+  Omit module to route via runner-api (default runner module).`,
   inputSchema: {
     type: 'object' as const,
     properties: {
@@ -56,7 +58,7 @@ Auto-push validates CommonJS structure before pushing.`,
       },
       module: {
         type: 'string',
-        description: 'CommonJS module name — if provided, calls require(module)[function](...args) directly. Omit to route through runner-api.',
+        description: 'Module path, e.g. "common-js/utils". Calls require(module)[function](...args). Omit to route via runner-api.',
       },
       function: {
         type: 'string',
@@ -302,7 +304,6 @@ export async function handleExecTool(
       filesSync,
       hints: {
         next: `Function executed. ${filesSync} files pushed before execution.`,
-        commonjs: 'GAS CommonJS: function _main(){ exports.fn=function(){...}; } __defineModule__(_main,false);',
       },
     };
   } catch (error: unknown) {

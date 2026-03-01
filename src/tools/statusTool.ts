@@ -26,7 +26,8 @@ export interface StatusToolResult {
 
 export const STATUS_TOOL_DEFINITION = {
   name: 'status',
-  description: `Compare local .gs files vs remote GAS project by name. Shows localOnly, remoteOnly, and shared file counts. exec and push always push all local files.`,
+  description: `Read-only: compare local .gs files vs remote GAS project. Shows localOnly, remoteOnly, shared counts. push and exec always push all local files.`,
+  annotations: { readOnlyHint: true },
   inputSchema: {
     type: 'object' as const,
     properties: {
@@ -81,9 +82,7 @@ export async function handleStatusTool(
 
     const summary = parts.length > 0 ? parts.join(' | ') : 'No files found';
 
-    const hints: Record<string, string> = {
-      commonjs: 'GAS CommonJS: function _main(){ exports.fn=function(){...}; } __defineModule__(_main,false);',
-    };
+    const hints: Record<string, string> = {};
 
     if (status.localOnly.length > 0) {
       hints.next = 'local-only files exist — push or exec to sync';

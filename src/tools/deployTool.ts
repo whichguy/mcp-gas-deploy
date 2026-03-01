@@ -72,10 +72,9 @@ export interface DeployToolResult {
 
 export const DEPLOY_TOOL_DEFINITION = {
   name: 'deploy',
-  description: `Create a version snapshot and pin a web app deployment (staging or prod).
+  description: `Create a versioned web app deployment (staging | prod). Required before exec can run.
 
-Pre-deploy: validates CommonJS and pushes all local files unconditionally.
-Stores deployment URLs in local gas-deploy.json for use by exec.`,
+Pre-deploy: validates CommonJS, pushes all local files. Stores deployment URL for exec.`,
   inputSchema: {
     type: 'object' as const,
     properties: {
@@ -217,7 +216,6 @@ export async function handleDeployTool(
         next: webAppUrl
           ? `Deployed to ${to} (v${version.versionNumber}). URL: ${webAppUrl}. Run \`exec\` to verify.`
           : `Version ${version.versionNumber} deployed to ${to}. Deployment ID: ${deploymentId}.`,
-        commonjs: 'GAS CommonJS: function _main(){ exports.fn=function(){...}; } __defineModule__(_main,false);',
       },
     };
   } catch (error: unknown) {

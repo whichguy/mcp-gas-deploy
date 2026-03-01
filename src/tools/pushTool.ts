@@ -44,11 +44,14 @@ export const PUSH_TOOL_DEFINITION = {
   name: 'push',
   description: `Push local .gs files to GAS after CommonJS validation.
 
-Files must follow the CommonJS pattern:
-  function _main() { ... }
-  __defineModule__(_main, false); // false=lazy, true=eager(triggers)
+ALL .gs files MUST follow the CommonJS module pattern:
+  function _main() { exports.fn = function() { ... }; }
+  __defineModule__(_main, false); // false=lazy | true=eager (trigger files)
+Trigger files: assign __events__.onOpen = ... inside _main() — no bare trigger functions.
 
-Validation errors are returned with exact fix suggestions.`,
+Validation errors include line numbers and fix suggestions.
+skipValidation=true: ONLY for system shim files (require.gs, __mcp_exec.gs).`,
+  annotations: { destructiveHint: true },
   inputSchema: {
     type: 'object' as const,
     properties: {
@@ -66,7 +69,7 @@ Validation errors are returned with exact fix suggestions.`,
       },
       skipValidation: {
         type: 'boolean',
-        description: 'Skip CommonJS validation — only for system files (e.g. require.gs) that intentionally differ from the module pattern',
+        description: 'ONLY for system shim files (require.gs, __mcp_exec.gs) — never use for regular modules',
       },
     },
     required: ['scriptId'],
@@ -135,7 +138,6 @@ export async function handlePushTool(
       filesPushed: [],
       hints: {
         next: 'All files are already in sync. No push needed.',
-        commonjs: 'GAS CommonJS: function _main(){ exports.fn=function(){...}; } __defineModule__(_main,false);',
       },
     };
   }
@@ -148,7 +150,6 @@ export async function handlePushTool(
       next: dryRun
         ? `${result.filesPushed.length} files ${verb}. Run without dryRun to push.`
         : `${result.filesPushed.length} files ${verb}. Run \`exec\` to verify or \`deploy\` to create a stable version.`,
-      commonjs: 'Remember: all code inside `function _main()`, call `__defineModule__(_main, false)` at end',
     },
   };
 }
