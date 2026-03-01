@@ -384,8 +384,8 @@ export async function handleDeployTool(
       const prevVersionNumberKey = to === 'staging' ? 'stagingVersionNumber' : 'prodVersionNumber';
       const previousVersionNumber = deployInfo[prevVersionNumberKey];
 
-      // Capture opposite env's timestamp BEFORE write for staleness hint
-      const prevOppositeTs = from === 'staging' ? deployInfo.stagingDeployedAt : deployInfo.prodDeployedAt;
+      // Capture source env's timestamp BEFORE write for staleness hint
+      const prevSourceTs = from === 'staging' ? deployInfo.stagingDeployedAt : deployInfo.prodDeployedAt;
 
       // Re-point target deployment to source's versionNumber
       const updated = await deployOps.updateDeployment(scriptId, targetDeploymentId, sourceVersionNumber);
@@ -410,12 +410,11 @@ export async function handleDeployTool(
           : `No previous version recorded for ${to}.`,
       };
 
-      // Staleness hint: if we just promoted to prod, check whether staging is now stale vs prod
-      if (to === 'prod' && prevOppositeTs) {
+      // Staleness hint: if we just promoted to prod, check whether staging is now stale
+      if (to === 'prod' && prevSourceTs) {
         const now = Date.now();
-        const stagingAge = now - new Date(prevOppositeTs).getTime();
-        const prodAge = now - new Date(updateInfo[tsField] as string).getTime();
-        if (stagingAge > STALE_THRESHOLD_MS && prodAge < stagingAge) {
+        const stagingAge = now - new Date(prevSourceTs).getTime();
+        if (stagingAge > STALE_THRESHOLD_MS) {
           const h = Math.round(stagingAge / (60 * 60 * 1000));
           hints.stale = `staging is ${h}h old — consider re-deploying staging with fresh changes`;
         }
@@ -521,7 +520,6 @@ export async function handleDeployTool(
 
     // Capture opposite env's timestamp BEFORE setDeploymentInfo mutates info (for staleness hint)
     const prevProdDeployedAt = to === 'staging' ? deployInfo.prodDeployedAt : undefined;
-    const prevStagingDeployedAt = to === 'prod' ? deployInfo.stagingDeployedAt : undefined;
 
     // Store deployment info — use GAS API's authoritative updateTime; fall back to client clock
     const tsField = to === 'staging' ? 'stagingDeployedAt' : 'prodDeployedAt';
@@ -562,8 +560,6 @@ export async function handleDeployTool(
       }
     }
     // No stale hint when deploying to prod — prod just caught up
-
-    void prevStagingDeployedAt; // used only as pre-write capture; no hint needed when deploying to prod
 
     const response: DeployToolResult = {
       success: true,
