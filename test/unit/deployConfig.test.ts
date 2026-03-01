@@ -87,16 +87,21 @@ describe('deployConfig', () => {
     });
 
     it('round-trips: timestamp and consumer config fields survive write/read', async () => {
+      // Use runtime timestamps — any valid ISO string should round-trip unchanged
+      const now = Date.now();
+      const stagingTs = new Date(now - 6 * 60 * 60 * 1000).toISOString();  // 6h ago
+      const prodTs    = new Date(now - 72 * 60 * 60 * 1000).toISOString(); // 72h ago
+
       const config = {
         scriptId123: {
           stagingDeploymentId: 'AKfycbStaging',
           stagingVersionNumber: 5,
           stagingUrl: 'https://script.google.com/macros/s/staging/exec',
-          stagingDeployedAt: '2026-03-01T12:00:00.000Z',
+          stagingDeployedAt: stagingTs,
           prodDeploymentId: 'AKfycbProd',
           prodVersionNumber: 5,
           prodUrl: 'https://script.google.com/macros/s/prod/exec',
-          prodDeployedAt: '2026-03-01T18:00:00.000Z',
+          prodDeployedAt: prodTs,
           userSymbol: 'SheetsChat',
           stagingConsumerScriptId: 'consumerStagingScriptId',
           stagingConsumerDeploymentId: 'AKfycbConsumerStaging',
@@ -127,10 +132,15 @@ describe('deployConfig', () => {
     });
 
     it('returns stagingDeployedAt and prodDeployedAt when present', async () => {
+      // Use runtime timestamps — any valid ISO string should survive the write/read cycle
+      const now = Date.now();
+      const stagingTs = new Date(now - 2 * 60 * 60 * 1000).toISOString();  // 2h ago
+      const prodTs    = new Date(now - 72 * 60 * 60 * 1000).toISOString(); // 72h ago
+
       const config = {
         scriptY: {
-          stagingDeployedAt: '2026-03-01T12:00:00.000Z',
-          prodDeployedAt: '2026-02-28T12:00:00.000Z',
+          stagingDeployedAt: stagingTs,
+          prodDeployedAt: prodTs,
           stagingVersionNumber: 3,
           prodVersionNumber: 2,
         },
@@ -138,8 +148,8 @@ describe('deployConfig', () => {
       await writeDeployConfig(tmpDir, config);
 
       const info = await getDeploymentInfo(tmpDir, 'scriptY');
-      assert.equal(info.stagingDeployedAt, '2026-03-01T12:00:00.000Z');
-      assert.equal(info.prodDeployedAt, '2026-02-28T12:00:00.000Z');
+      assert.equal(info.stagingDeployedAt, stagingTs);
+      assert.equal(info.prodDeployedAt, prodTs);
     });
 
     it('returns consumer config fields when present', async () => {
