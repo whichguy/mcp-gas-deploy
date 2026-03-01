@@ -102,7 +102,6 @@ describe('validateUserSymbol', () => {
     assert.doesNotThrow(() => validateUserSymbol('SheetsChat'));
     assert.doesNotThrow(() => validateUserSymbol('myLib'));
     assert.doesNotThrow(() => validateUserSymbol('_private'));
-    assert.doesNotThrow(() => validateUserSymbol('$helper'));
     assert.doesNotThrow(() => validateUserSymbol('lib123'));
   });
 
@@ -118,6 +117,7 @@ describe('validateUserSymbol', () => {
     assert.throws(() => validateUserSymbol('my-lib'), /invalid/i);
     assert.throws(() => validateUserSymbol('my.lib'), /invalid/i);
     assert.throws(() => validateUserSymbol('lib@v2'), /invalid/i);
+    assert.throws(() => validateUserSymbol('$helper'), /invalid/i);
   });
 
   it('throws on empty string', () => {

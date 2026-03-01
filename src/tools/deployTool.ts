@@ -20,6 +20,7 @@ import {
   getDeploymentInfo,
   setDeploymentInfo,
   type DeploymentInfo,
+  STALE_THRESHOLD_MS,
 } from '../config/deployConfig.js';
 import { SCRIPT_ID_PATTERN } from '../utils/validation.js';
 import { generateShimCode, validateUserSymbol, buildConsumerManifest } from '../utils/consumerShim.js';
@@ -147,8 +148,6 @@ Pre-deploy: validates CommonJS, pushes all local files. Stores deployment URL fo
   },
 };
 
-// 48h — arbitrary but conservative; adjust if prod/staging cadence differs
-const STALE_THRESHOLD_MS = 48 * 60 * 60 * 1000;
 
 /**
  * Push shim code + updated manifest to a consumer project, create a version,
@@ -401,14 +400,19 @@ export async function handleDeployTool(
         const urlField = to === 'staging' ? 'stagingUrl' : 'prodUrl';
         updateInfo[urlField] = updated.webAppUrl;
       }
-      await setDeploymentInfo(resolvedDir, scriptId, updateInfo);
-
+      // GAS side is done — write local config. If this fails, the promote still succeeded.
       const hints: Record<string, string> = {
         next: `Promoted v${sourceVersionNumber} from ${from} → ${to}. URL: ${updated.webAppUrl ?? targetDeploymentId}.`,
         rollback: previousVersionNumber != null
           ? `To undo: action=rollback to="${to}" versionNumber=${previousVersionNumber}`
           : `No previous version recorded for ${to}.`,
       };
+      try {
+        await setDeploymentInfo(resolvedDir, scriptId, updateInfo);
+      } catch (configErr: unknown) {
+        const msg = configErr instanceof Error ? configErr.message : String(configErr);
+        hints.warning = `GAS promote succeeded but gas-deploy.json update failed: ${msg}`;
+      }
 
       // Staleness hint: if we just promoted to prod, check whether staging is now stale
       if (to === 'prod' && prevSourceTs) {
@@ -553,7 +557,8 @@ export async function handleDeployTool(
       if (prevProdDeployedAt) {
         const prodAge = now - new Date(prevProdDeployedAt).getTime();
         const stagingAge = now - new Date(stagingTs).getTime();
-        if (stagingAge < prodAge && prodAge > STALE_THRESHOLD_MS) {
+        if (!isNaN(prodAge) && !isNaN(stagingAge)
+            && stagingAge < prodAge && prodAge > STALE_THRESHOLD_MS) {
           const h = Math.round(prodAge / (60 * 60 * 1000));
           hints.stale = `prod is ${h}h behind staging (v${version.versionNumber}) — consider: action=promote from=staging to=prod`;
         }
@@ -575,7 +580,11 @@ export async function handleDeployTool(
     const consumerScriptId = deployInfo[to === 'staging' ? 'stagingConsumerScriptId' : 'prodConsumerScriptId'];
     const userSymbol = deployInfo.userSymbol;
 
-    if (consumerScriptId && userSymbol) {
+    if (consumerScriptId && !userSymbol) {
+      hints.consumerSkipped = `Consumer shim skipped — userSymbol is not set in gas-deploy.json`;
+    } else if (userSymbol && !consumerScriptId) {
+      hints.consumerSkipped = `Consumer shim skipped — ${to}ConsumerScriptId is not set in gas-deploy.json`;
+    } else if (consumerScriptId && userSymbol) {
       try {
         validateUserSymbol(userSymbol);
         const consumerDeploymentId = deployInfo[to === 'staging' ? 'stagingConsumerDeploymentId' : 'prodConsumerDeploymentId'];

@@ -10,9 +10,7 @@ import os from 'node:os';
 import { GASFileOperations } from '../api/gasFileOperations.js';
 import { getStatus, type SyncStatus } from '../sync/rsync.js';
 import { SCRIPT_ID_PATTERN } from '../utils/validation.js';
-import { getDeploymentInfo, type DeploymentInfo } from '../config/deployConfig.js';
-
-const STALE_THRESHOLD_MS = 48 * 60 * 60 * 1000; // 48 hours
+import { getDeploymentInfo, type DeploymentInfo, STALE_THRESHOLD_MS } from '../config/deployConfig.js';
 
 function buildStalenessHints(
   info: DeploymentInfo | undefined,
@@ -27,9 +25,11 @@ function buildStalenessHints(
   const prodAge = info.prodDeployedAt
     ? now - new Date(info.prodDeployedAt).getTime() : null;
 
-  // prod stale vs staging
+  // prod stale vs staging — suppress if already on the same version
   if (stagingAge !== null && prodAge !== null
-      && stagingAge < prodAge && prodAge > STALE_THRESHOLD_MS) {
+      && stagingAge < prodAge && prodAge > STALE_THRESHOLD_MS
+      && (info.stagingVersionNumber == null || info.prodVersionNumber == null
+          || info.stagingVersionNumber !== info.prodVersionNumber)) {
     const h = Math.round(prodAge / (60 * 60 * 1000));
     hints.staleprod = `prod is ${h}h behind staging (v${info.stagingVersionNumber ?? '?'}) — consider: action=promote from=staging to=prod`;
   }
