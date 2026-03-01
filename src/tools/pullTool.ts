@@ -26,7 +26,12 @@ export interface PullToolResult {
 
 export const PULL_TOOL_DEFINITION = {
   name: 'pull',
-  description: `Fetch all files from a GAS project to a local directory. Auto-initializes git. Files follow the CommonJS module pattern — see hints in the response for editing guidance.`,
+  description: `Fetch GAS project files to local directory. Auto-initializes git.
+
+All .gs files use the GAS CommonJS module pattern — edit them as modules:
+  function _main() { exports.fn = function() { ... }; }
+  __defineModule__(_main, false); // false=lazy | true=eager (trigger files)
+New files: place in common-js/ folder using this pattern.`,
   inputSchema: {
     type: 'object' as const,
     properties: {
@@ -88,7 +93,6 @@ export async function handlePullTool(
       localDir: resolvedDir,
       hints: {
         next: `Run pull without dryRun to write ${remoteFiles.length} files to ${resolvedDir}`,
-        commonjs: 'GAS CommonJS: function _main(){ exports.fn=function(){...}; } __defineModule__(_main,false);',
       },
     };
   }
