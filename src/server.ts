@@ -21,6 +21,7 @@ import { handlePushTool, PUSH_TOOL_DEFINITION } from './tools/pushTool.js';
 import { handleExecTool, EXEC_TOOL_DEFINITION } from './tools/execTool.js';
 import { handleDeployTool, DEPLOY_TOOL_DEFINITION } from './tools/deployTool.js';
 import { handleProjectsTool, PROJECTS_TOOL_DEFINITION } from './tools/projectsTool.js';
+import { handleProjectCopyTool, PROJECT_COPY_TOOL_DEFINITION } from './tools/projectCopyTool.js';
 import { GASDeployOperations } from './api/gasDeployOperations.js';
 import { GASProjectOperations } from './api/gasProjectOperations.js';
 
@@ -49,6 +50,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       EXEC_TOOL_DEFINITION,
       DEPLOY_TOOL_DEFINITION,
       PROJECTS_TOOL_DEFINITION,
+      PROJECT_COPY_TOOL_DEFINITION,
     ],
   };
 });
@@ -108,6 +110,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'projects': {
         const result = await handleProjectsTool(args as unknown as Parameters<typeof handleProjectsTool>[0], projectOps);
+        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+      }
+
+      case 'project_copy': {
+        const result = await handleProjectCopyTool(args as unknown as Parameters<typeof handleProjectCopyTool>[0], fileOps, projectOps);
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       }
 

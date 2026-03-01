@@ -1,12 +1,14 @@
 /**
  * Project Operations for mcp_gas_deploy
  *
- * Provides project discovery via the Google Drive API.
- * Only standalone GAS scripts are discoverable (mimeType: application/vnd.google-apps.script).
- * Container-bound scripts (attached to Docs/Sheets/Slides) are NOT returned — they
- * are not separate Drive files and cannot be discovered without a known scriptId.
+ * Provides project discovery (Drive API) and project management (Script API).
  *
- * Requires: https://www.googleapis.com/auth/drive.readonly scope.
+ * Discovery limitation: only standalone GAS scripts are discoverable via Drive.
+ * Container-bound scripts (attached to Docs/Sheets/Slides) are NOT returned by
+ * listProjects — they are not separate Drive files.
+ *
+ * Requires: https://www.googleapis.com/auth/drive.readonly (discovery)
+ *           https://www.googleapis.com/auth/script.projects (create/get)
  */
 
 import { GASAuthOperations } from './gasAuthOperations.js';
@@ -15,7 +17,7 @@ import type { GASProject } from './gasTypes.js';
 const GAS_SCRIPT_MIME = "application/vnd.google-apps.script";
 
 /**
- * Manages GAS project discovery operations via the Drive API.
+ * Manages GAS project discovery and creation operations.
  */
 export class GASProjectOperations {
   private authOps: GASAuthOperations;
@@ -58,6 +60,45 @@ export class GASProjectOperations {
         createTime: f.createdTime ?? undefined,
         updateTime: f.modifiedTime ?? undefined,
       }));
+    });
+  }
+
+  /**
+   * Get the title of a GAS project by scriptId.
+   * Returns null if the project cannot be found or permission is denied.
+   */
+  async getProjectTitle(scriptId: string): Promise<string | null> {
+    try {
+      return await this.authOps.makeAuthenticatedRequest(async (scriptApi) => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const response = await (scriptApi.projects as any).get({ scriptId });
+        return (response.data.title as string) ?? null;
+      });
+    } catch {
+      return null; // Non-fatal — caller uses a fallback title
+    }
+  }
+
+  /**
+   * Create a new standalone GAS project with the given title.
+   * Returns the new project's scriptId and title.
+   */
+  async createProject(title: string): Promise<{ scriptId: string; title: string }> {
+    return this.authOps.makeAuthenticatedRequest(async (scriptApi) => {
+      console.error(`createProject: creating "${title}"`);
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const response = await (scriptApi.projects as any).create({
+        requestBody: { title },
+      });
+
+      const scriptId = response.data.scriptId as string | undefined;
+      if (!scriptId) {
+        throw new Error('createProject: API response missing scriptId');
+      }
+
+      console.error(`createProject: created ${scriptId} ("${title}")`);
+      return { scriptId, title: (response.data.title as string) ?? title };
     });
   }
 }
