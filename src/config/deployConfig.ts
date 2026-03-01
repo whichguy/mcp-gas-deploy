@@ -35,6 +35,9 @@ export interface DeployConfig {
   [scriptId: string]: DeploymentInfo;
 }
 
+/** Threshold for staleness hints — 48 hours. Shared by deployTool and statusTool. */
+export const STALE_THRESHOLD_MS = 48 * 60 * 60 * 1000;
+
 const CONFIG_FILENAME = 'gas-deploy.json';
 
 function getConfigPath(localDir: string): string {

@@ -14,11 +14,12 @@
  * Throws with a clear message if invalid — called before any API call.
  */
 export function validateUserSymbol(userSymbol: string): void {
-  // Must be a valid JS identifier: starts with letter or _, no spaces or special chars
-  if (!/^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(userSymbol)) {
+  // Must be a valid GAS library namespace: letters, digits, underscores only.
+  // Mirrors the canonical mcp_gas validator — $ is excluded to match that constraint.
+  if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(userSymbol)) {
     throw new Error(
       `Invalid userSymbol "${userSymbol}": must be a valid JavaScript identifier ` +
-      `(letters, digits, _ or $; cannot start with a digit; no spaces or special characters)`
+      `(letters, numbers, underscores only; cannot start with a digit)`
     );
   }
 }
@@ -35,9 +36,9 @@ export function generateShimCode(userSymbol: string): string {
 // Delegates all calls to library: ${userSymbol}
 
 function onOpen(e) { return ${userSymbol}.onOpen(e); }
-function onInstall(e) { return ${userSymbol}.onInstall(e); }
+function onInstall(e) { return ${userSymbol}.onOpen(e); }
 function onEdit(e) { return ${userSymbol}.onEdit(e); }
-function exec_api(payload) { return ${userSymbol}.exec_api(payload); }
+function exec_api(options, moduleName, functionName) { return ${userSymbol}.exec_api.apply(null, arguments); }
 function showSidebar() { return ${userSymbol}.showSidebar(); }
 function initialize() { return ${userSymbol}.initialize(); }
 function menuAction1() { return ${userSymbol}.menuAction1(); }
@@ -48,9 +49,10 @@ function menuAction2() { return ${userSymbol}.menuAction2(); }
 /**
  * Build consumer appsscript.json content.
  *
- * Always uses developmentMode: true + version "0" (HEAD resolution at runtime).
- * At runtime, GAS resolves HEAD of sourceScriptId — subsequent source pushes
- * are reflected automatically without a new consumer version.
+ * Always uses developmentMode: true (which causes GAS to resolve HEAD of the library
+ * at runtime, ignoring the version field). version "0" is included for clarity but is
+ * inert when developmentMode is true. Subsequent source pushes are reflected automatically
+ * without a new consumer version.
  *
  * oauthScopes and timeZone are copied from the source project's manifest when available.
  */
