@@ -60,8 +60,9 @@ async function ensureWebAppManifest(localDir: string): Promise<void> {
 export interface DeployToolParams {
   scriptId: string;
   localDir?: string;
-  action?: 'deploy' | 'list-versions' | 'rollback';
+  action?: 'deploy' | 'list-versions' | 'rollback' | 'promote';
   to?: 'staging' | 'prod';
+  from?: 'staging' | 'prod';
   versionNumber?: number;
   description?: string;
 }
@@ -71,6 +72,9 @@ export interface DeployToolResult {
   action: string;
   environment?: string;
   versionNumber?: number;
+  previousVersionNumber?: number;
+  sourceEnv?: string;
+  targetEnv?: string;
   deploymentId?: string;
   webAppUrl?: string;
   versions?: Array<{
@@ -83,6 +87,12 @@ export interface DeployToolResult {
     remaining: number;
     limit: number;
   };
+  consumerUpdate?: {
+    scriptId: string;
+    versionNumber?: number;
+    deploymentUpdated?: boolean;
+    error?: string;
+  };
   error?: string;
   hints: Record<string, string>;
 }
@@ -94,6 +104,7 @@ export const DEPLOY_TOOL_DEFINITION = {
 action=deploy (default): Push files and create a versioned web app deployment (staging | prod).
 action=list-versions: List all version snapshots and remaining budget (cap: 200 per project).
 action=rollback: Revert staging or prod deployment to a prior version (instant, no file push).
+action=promote: Re-point target env to source env's existing versionNumber — no new version consumed, no push required.
 
 Pre-deploy: validates CommonJS, pushes all local files. Stores deployment URL for exec.`,
   inputSchema: {
@@ -109,13 +120,18 @@ Pre-deploy: validates CommonJS, pushes all local files. Stores deployment URL fo
       },
       action: {
         type: 'string',
-        enum: ['deploy', 'list-versions', 'rollback'],
-        description: 'Action: deploy (default), list-versions, or rollback',
+        enum: ['deploy', 'list-versions', 'rollback', 'promote'],
+        description: 'Action: deploy (default), list-versions, rollback, or promote',
       },
       to: {
         type: 'string',
         enum: ['staging', 'prod'],
-        description: 'Target environment — required for deploy and rollback',
+        description: 'Target environment — required for deploy, rollback, and promote',
+      },
+      from: {
+        type: 'string',
+        enum: ['staging', 'prod'],
+        description: 'Source environment — required for promote',
       },
       versionNumber: {
         type: 'number',
@@ -130,12 +146,15 @@ Pre-deploy: validates CommonJS, pushes all local files. Stores deployment URL fo
   },
 };
 
+// 48h — arbitrary but conservative; adjust if prod/staging cadence differs
+const STALE_THRESHOLD_MS = 48 * 60 * 60 * 1000;
+
 export async function handleDeployTool(
   params: DeployToolParams,
   fileOps: GASFileOperations,
   deployOps: GASDeployOperations
 ): Promise<DeployToolResult> {
-  const { scriptId, localDir, action = 'deploy', to, description, versionNumber } = params;
+  const { scriptId, localDir, action = 'deploy', to, from, description, versionNumber } = params;
 
   if (!SCRIPT_ID_PATTERN.test(scriptId)) {
     return {
@@ -257,6 +276,118 @@ export async function handleDeployTool(
     }
   }
 
+  // promote: re-point target deployment to source's existing versionNumber — no new version consumed
+  if (action === 'promote') {
+    if (!from) {
+      return {
+        success: false, action,
+        error: 'from (staging|prod) is required for promote',
+        hints: { fix: 'Specify from="staging" or from="prod"' },
+      };
+    }
+    if (!to) {
+      return {
+        success: false, action,
+        error: 'to (staging|prod) is required for promote',
+        hints: { fix: 'Specify to="staging" or to="prod"' },
+      };
+    }
+    if (from === to) {
+      return {
+        success: false, action,
+        error: 'from and to must differ',
+        hints: { fix: 'Specify different environments for from and to' },
+      };
+    }
+
+    try {
+      const deployInfo = await getDeploymentInfo(resolvedDir, scriptId);
+
+      const sourceDeploymentIdKey = from === 'staging' ? 'stagingDeploymentId' : 'prodDeploymentId';
+      const sourceDeploymentId = deployInfo[sourceDeploymentIdKey];
+      if (!sourceDeploymentId) {
+        return {
+          success: false, action,
+          error: `No ${from} deployment found. Run deploy with action=deploy and to="${from}" first.`,
+          hints: { fix: `Deploy to ${from} first before promoting from it` },
+        };
+      }
+
+      const targetDeploymentIdKey = to === 'staging' ? 'stagingDeploymentId' : 'prodDeploymentId';
+      const targetDeploymentId = deployInfo[targetDeploymentIdKey];
+      if (!targetDeploymentId) {
+        return {
+          success: false, action,
+          error: `No ${to} deployment found. Run deploy with action=deploy and to="${to}" first.`,
+          hints: { fix: `Deploy to ${to} first before promoting into it` },
+        };
+      }
+
+      // Read source versionNumber — throws if HEAD-only
+      const sourceVersionNumber = await deployOps.getDeploymentVersionNumber(scriptId, sourceDeploymentId);
+
+      // Capture previous target versionNumber for rollback recovery in response
+      const prevVersionNumberKey = to === 'staging' ? 'stagingVersionNumber' : 'prodVersionNumber';
+      const previousVersionNumber = deployInfo[prevVersionNumberKey];
+
+      // Capture opposite env's timestamp BEFORE write for staleness hint
+      const prevOppositeTs = from === 'staging' ? deployInfo.stagingDeployedAt : deployInfo.prodDeployedAt;
+
+      // Re-point target deployment to source's versionNumber
+      const updated = await deployOps.updateDeployment(scriptId, targetDeploymentId, sourceVersionNumber);
+
+      // Write gas-deploy.json: target env versionNumber + timestamp
+      const tsField = to === 'staging' ? 'stagingDeployedAt' : 'prodDeployedAt';
+      const versionNumberField = to === 'staging' ? 'stagingVersionNumber' : 'prodVersionNumber';
+      const updateInfo: Partial<DeploymentInfo> = {
+        [versionNumberField]: sourceVersionNumber,
+        [tsField]: updated.updateTime ?? new Date().toISOString(),
+      };
+      if (updated.webAppUrl) {
+        const urlField = to === 'staging' ? 'stagingUrl' : 'prodUrl';
+        updateInfo[urlField] = updated.webAppUrl;
+      }
+      await setDeploymentInfo(resolvedDir, scriptId, updateInfo);
+
+      const hints: Record<string, string> = {
+        next: `Promoted v${sourceVersionNumber} from ${from} → ${to}. URL: ${updated.webAppUrl ?? targetDeploymentId}.`,
+        rollback: previousVersionNumber != null
+          ? `To undo: action=rollback to="${to}" versionNumber=${previousVersionNumber}`
+          : `No previous version recorded for ${to}.`,
+      };
+
+      // Staleness hint: if we just promoted to prod, check whether staging is now stale vs prod
+      if (to === 'prod' && prevOppositeTs) {
+        const now = Date.now();
+        const stagingAge = now - new Date(prevOppositeTs).getTime();
+        const prodAge = now - new Date(updateInfo[tsField] as string).getTime();
+        if (stagingAge > STALE_THRESHOLD_MS && prodAge < stagingAge) {
+          const h = Math.round(stagingAge / (60 * 60 * 1000));
+          hints.stale = `staging is ${h}h old — consider re-deploying staging with fresh changes`;
+        }
+      }
+
+      return {
+        success: true,
+        action: 'promote',
+        versionNumber: sourceVersionNumber,
+        previousVersionNumber,
+        sourceEnv: from,
+        targetEnv: to,
+        deploymentId: targetDeploymentId,
+        webAppUrl: updated.webAppUrl,
+        hints,
+      };
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        success: false, action,
+        error: `Promote failed: ${message}`,
+        hints: { fix: 'Check authentication and that both environments have deployments in gas-deploy.json' },
+      };
+    }
+  }
+
   // --- action: deploy (default) ---
   if (!to) {
     return {
@@ -304,12 +435,14 @@ export async function handleDeployTool(
 
     let deploymentId: string;
     let webAppUrl: string | undefined;
+    let deployUpdateTime: string | undefined;
 
     if (existingDeploymentId) {
       // Update existing deployment to new version
       const updated = await deployOps.updateDeployment(scriptId, existingDeploymentId, version.versionNumber);
       deploymentId = updated.deploymentId;
       webAppUrl = updated.webAppUrl;
+      deployUpdateTime = updated.updateTime;
     } else {
       // Find a web app deployment to reuse, or create a new one
       const deployments = await deployOps.listDeployments(scriptId);
@@ -322,16 +455,26 @@ export async function handleDeployTool(
         const updated = await deployOps.updateDeployment(scriptId, webAppDeployment.deploymentId, version.versionNumber);
         deploymentId = updated.deploymentId;
         webAppUrl = updated.webAppUrl;
+        deployUpdateTime = updated.updateTime;
       } else {
         // Create new deployment
         const created = await deployOps.createDeployment(scriptId, version.versionNumber, `${to} deployment`);
         deploymentId = created.deploymentId;
         webAppUrl = created.webAppUrl;
+        deployUpdateTime = created.updateTime;
       }
     }
 
-    // Store deployment info
-    const updateInfo: Partial<DeploymentInfo> = { lastDeploy: new Date().toISOString() };
+    // Capture opposite env's timestamp BEFORE setDeploymentInfo mutates info (for staleness hint)
+    const prevProdDeployedAt = to === 'staging' ? deployInfo.prodDeployedAt : undefined;
+    const prevStagingDeployedAt = to === 'prod' ? deployInfo.stagingDeployedAt : undefined;
+
+    // Store deployment info — use GAS API's authoritative updateTime; fall back to client clock
+    const tsField = to === 'staging' ? 'stagingDeployedAt' : 'prodDeployedAt';
+    const updateInfo: Partial<DeploymentInfo> = {
+      lastDeploy: new Date().toISOString(),
+      [tsField]: deployUpdateTime ?? new Date().toISOString(),
+    };
 
     if (to === 'staging') {
       updateInfo.stagingDeploymentId = deploymentId;
@@ -345,6 +488,29 @@ export async function handleDeployTool(
 
     await setDeploymentInfo(resolvedDir, scriptId, updateInfo);
 
+    // Staleness hint: prod stale vs staging
+    const hints: Record<string, string> = {
+      next: webAppUrl
+        ? `Deployed to ${to} (v${version.versionNumber}). URL: ${webAppUrl}. Run \`exec\` to verify.`
+        : `Version ${version.versionNumber} deployed to ${to}. Deployment ID: ${deploymentId}.`,
+    };
+
+    const now = Date.now();
+    if (to === 'staging') {
+      const stagingTs = updateInfo[tsField] as string;
+      if (prevProdDeployedAt) {
+        const prodAge = now - new Date(prevProdDeployedAt).getTime();
+        const stagingAge = now - new Date(stagingTs).getTime();
+        if (stagingAge < prodAge && prodAge > STALE_THRESHOLD_MS) {
+          const h = Math.round(prodAge / (60 * 60 * 1000));
+          hints.stale = `prod is ${h}h behind staging (v${version.versionNumber}) — consider: action=promote from=staging to=prod`;
+        }
+      }
+    }
+    // No stale hint when deploying to prod — prod just caught up
+
+    void prevStagingDeployedAt; // used only as pre-write capture; no hint needed when deploying to prod
+
     return {
       success: true,
       action: 'deploy',
@@ -352,11 +518,7 @@ export async function handleDeployTool(
       versionNumber: version.versionNumber,
       deploymentId,
       webAppUrl,
-      hints: {
-        next: webAppUrl
-          ? `Deployed to ${to} (v${version.versionNumber}). URL: ${webAppUrl}. Run \`exec\` to verify.`
-          : `Version ${version.versionNumber} deployed to ${to}. Deployment ID: ${deploymentId}.`,
-      },
+      hints,
     };
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
