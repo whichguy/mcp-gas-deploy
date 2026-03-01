@@ -46,6 +46,27 @@ export class GASDeployOperations {
   }
 
   /**
+   * List all saved version snapshots for a project.
+   * GAS enforces a hard cap of 200 versions per project (enforced June 2024).
+   * Versions cannot be deleted individually — monitor the budget via versionNumber count.
+   */
+  async listVersions(scriptId: string): Promise<GASVersion[]> {
+    return this.authOps.makeAuthenticatedRequest(async (scriptApi) => {
+      const response = await scriptApi.projects.versions.list({ scriptId });
+      const versions = response.data.versions ?? [];
+      console.error(`listVersions: found ${versions.length} versions for ${scriptId}`);
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return (versions as any[]).map((v): GASVersion => ({
+        scriptId: v.scriptId ?? scriptId,
+        versionNumber: v.versionNumber ?? 0,
+        description: v.description ?? undefined,
+        createTime: v.createTime ?? undefined,
+      }));
+    });
+  }
+
+  /**
    * List all existing deployments for a project.
    */
   async listDeployments(scriptId: string): Promise<GASDeployment[]> {

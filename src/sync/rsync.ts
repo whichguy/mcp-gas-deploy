@@ -2,7 +2,7 @@
  * Sync Engine for mcp_gas_deploy
  *
  * Handles pull (GAS → local), push (local → GAS with validation), and
- * status diffing between local and remote files by name.
+ * status diffing between local and remote files by name and content hash.
  *
  * Navigation comments:
  * - AUTO_PUSH: where push is triggered before exec
@@ -10,6 +10,7 @@
  */
 
 import { promises as fs } from 'node:fs';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { GASFileOperations } from '../api/gasFileOperations.js';
 import { validateFilesErrors, type ValidationResult } from '../validation/commonjsValidator.js';
@@ -20,7 +21,8 @@ import type { GASFile } from '../api/gasTypes.js';
 export interface SyncStatus {
   localOnly: FileStatus[];   // present locally, not on remote
   remoteOnly: FileStatus[];  // present on remote, not locally
-  both: FileStatus[];        // present on both sides
+  both: FileStatus[];        // present on both sides, content same
+  modified: FileStatus[];    // present on both sides, content differs
 }
 
 export interface FileStatus { name: string; }
@@ -84,6 +86,16 @@ function stripExtension(filename: string): string {
   return filename.replace(/\.(gs|html|json)$/, '');
 }
 
+/**
+ * Normalize file content and compute SHA256 hash.
+ * Normalizes CRLF → LF to match GAS server-side normalization,
+ * preventing spurious diff reports from line-ending differences.
+ */
+function hashContent(content: string): string {
+  const normalized = content.replace(/\r\n/g, '\n');
+  return createHash('sha256').update(normalized, 'utf-8').digest('hex');
+}
+
 /** Read all local .gs/.html/.json files in a directory (recursive). */
 async function readLocalFiles(
   localDir: string,
@@ -127,9 +139,12 @@ async function readLocalFiles(
 // --- Core operations ---
 
 /**
- * Compare local files vs remote files by name.
- * Classifies into localOnly (local only), remoteOnly (remote only), both (present on both sides).
- * No hash computation — name-only comparison.
+ * Compare local files vs remote files by name AND content hash.
+ * Classifies into:
+ *   localOnly  — present locally, not on remote
+ *   remoteOnly — present on remote, not locally
+ *   both       — present on both sides with identical content
+ *   modified   — present on both sides but content differs
  */
 export async function getStatus(
   scriptId: string,
@@ -144,13 +159,14 @@ export async function getStatus(
   }
 
   const remoteFiles = await fileOps.getProjectFiles(scriptId);
-  const remoteNames = new Set(remoteFiles.map(f => f.name));
+  const remoteByName = new Map(remoteFiles.map(f => [f.name, f]));
 
   if (!localExists) {
     return {
       localOnly: [],
-      remoteOnly: Array.from(remoteNames).map(name => ({ name })),
+      remoteOnly: Array.from(remoteByName.keys()).map(name => ({ name })),
       both: [],
+      modified: [],
     };
   }
 
@@ -160,22 +176,31 @@ export async function getStatus(
   const localOnly: FileStatus[] = [];
   const remoteOnly: FileStatus[] = [];
   const both: FileStatus[] = [];
+  const modified: FileStatus[] = [];
 
   for (const name of localNames) {
-    if (remoteNames.has(name)) {
-      both.push({ name });
+    if (remoteByName.has(name)) {
+      const remoteFile = remoteByName.get(name)!;
+      const localFile = localFiles.get(name)!;
+      const localHash = hashContent(localFile.source);
+      const remoteHash = hashContent(remoteFile.source ?? '');
+      if (localHash === remoteHash) {
+        both.push({ name });
+      } else {
+        modified.push({ name });
+      }
     } else {
       localOnly.push({ name });
     }
   }
 
-  for (const name of remoteNames) {
+  for (const name of remoteByName.keys()) {
     if (!localNames.has(name)) {
       remoteOnly.push({ name });
     }
   }
 
-  return { localOnly, remoteOnly, both };
+  return { localOnly, remoteOnly, both, modified };
 }
 
 /**
@@ -230,15 +255,23 @@ export async function pull(
 }
 
 /**
- * LOCK_GUARD + AUTO_PUSH: Validate and push all local files to GAS.
- * Always pushes ALL local files unconditionally.
+ * LOCK_GUARD + AUTO_PUSH: Validate and push local files to GAS.
+ *
+ * prune=false (default): MERGE — fetches remote files and preserves remote-only
+ * files by including them in the push payload. Safe default that prevents
+ * accidental deletion of GAS files not present locally.
+ *
+ * prune=true: REPLACE — pushes only local files. Remote-only files are removed
+ * from GAS (GAS API atomically replaces all files). Use explicitly when you
+ * want to clean up ghost files on the remote.
+ *
  * Uses a per-scriptId lock to prevent concurrent push race conditions.
  */
 export async function push(
   scriptId: string,
   localDir: string,
   fileOps: GASFileOperations,
-  options: { dryRun?: boolean; skipValidation?: boolean } = {}
+  options: { dryRun?: boolean; skipValidation?: boolean; prune?: boolean } = {}
 ): Promise<PushResult> {
   return withPushLock(scriptId, async () => {
     try {
@@ -248,7 +281,7 @@ export async function push(
         return { success: false, filesPushed: [], error: 'No .gs/.html/.json files found in local directory' };
       }
 
-      // Build the full file set from all local files
+      // Build the file set from local files
       const fileSet: GASFile[] = [];
       const gsFilesForValidation: Array<{ name: string; source: string; position: number }> = [];
       const allLocalNames: string[] = [];
@@ -259,6 +292,25 @@ export async function push(
           gsFilesForValidation.push({ name: local.filename, source: local.source, position: gsFilesForValidation.length });
         }
         allLocalNames.push(name);
+      }
+
+      // MERGE behavior (prune=false, default): fetch remote and preserve remote-only files.
+      // This prevents accidental deletion of files that exist on GAS but not locally.
+      // Pass prune=true to explicitly remove remote-only files from GAS.
+      if (!options.prune) {
+        try {
+          const remoteFiles = await fileOps.getProjectFiles(scriptId);
+          const localNameSet = new Set(localFiles.keys());
+          for (const remoteFile of remoteFiles) {
+            if (!localNameSet.has(remoteFile.name)) {
+              // Remote-only file — preserve it by including in the push payload
+              fileSet.push({ name: remoteFile.name, type: remoteFile.type, source: remoteFile.source ?? '' });
+            }
+          }
+        } catch {
+          // Non-fatal — if remote fetch fails, proceed with local-only push
+          console.error('[push] Could not fetch remote files for merge; proceeding with local-only push');
+        }
       }
 
       // GAS requires the CommonJS runtime (require / common-js/require) at position 0.

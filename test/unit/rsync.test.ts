@@ -1,7 +1,7 @@
 /**
  * Unit tests for simplified rsync logic
  *
- * Tests getStatus (name-only classification), push (unconditional all-local),
+ * Tests getStatus (name + content-hash classification), push (prune flag),
  * and pull (no .gas-sync-state.json written).
  *
  * GAS API calls and fs operations are mocked via sinon so tests run without
@@ -44,15 +44,40 @@ describe('getStatus', () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
-  it('classifies files present on both sides as both', async () => {
+  it('classifies files with identical content as both', async () => {
     await fs.writeFile(path.join(tmpDir, 'main.gs'), '// main', 'utf-8');
-    const fileOps = makeFileOps([gasFile('main')]);
+    const fileOps = makeFileOps([gasFile('main', '// main')]);
 
     const status = await getStatus('scriptId', tmpDir, fileOps);
 
     assert.deepEqual(status.both.map(f => f.name), ['main']);
     assert.deepEqual(status.localOnly, []);
     assert.deepEqual(status.remoteOnly, []);
+    assert.deepEqual(status.modified, []);
+  });
+
+  it('classifies files with different content as modified', async () => {
+    await fs.writeFile(path.join(tmpDir, 'main.gs'), '// updated locally', 'utf-8');
+    const fileOps = makeFileOps([gasFile('main', '// original on remote')]);
+
+    const status = await getStatus('scriptId', tmpDir, fileOps);
+
+    assert.deepEqual(status.modified.map(f => f.name), ['main']);
+    assert.deepEqual(status.both, []);
+    assert.deepEqual(status.localOnly, []);
+    assert.deepEqual(status.remoteOnly, []);
+  });
+
+  it('treats CRLF and LF as equivalent content (no spurious modified)', async () => {
+    // Write local file with LF
+    await fs.writeFile(path.join(tmpDir, 'main.gs'), 'line1\nline2', 'utf-8');
+    // Remote has CRLF — GAS may normalize line endings
+    const fileOps = makeFileOps([gasFile('main', 'line1\r\nline2')]);
+
+    const status = await getStatus('scriptId', tmpDir, fileOps);
+
+    assert.deepEqual(status.both.map(f => f.name), ['main'], 'CRLF vs LF should not produce a spurious modified');
+    assert.deepEqual(status.modified, []);
   });
 
   it('classifies files only in local dir as localOnly', async () => {
@@ -64,6 +89,7 @@ describe('getStatus', () => {
     assert.deepEqual(status.localOnly.map(f => f.name), ['localOnly']);
     assert.deepEqual(status.both, []);
     assert.deepEqual(status.remoteOnly, []);
+    assert.deepEqual(status.modified, []);
   });
 
   it('classifies files only on remote as remoteOnly', async () => {
@@ -75,6 +101,7 @@ describe('getStatus', () => {
     assert.deepEqual(status.remoteOnly.map(f => f.name), ['remoteOnly']);
     assert.deepEqual(status.both, []);
     assert.deepEqual(status.localOnly, []);
+    assert.deepEqual(status.modified, []);
   });
 
   it('returns all remoteOnly when localDir does not exist', async () => {
@@ -86,24 +113,31 @@ describe('getStatus', () => {
     assert.equal(status.remoteOnly.length, 2);
     assert.deepEqual(status.localOnly, []);
     assert.deepEqual(status.both, []);
+    assert.deepEqual(status.modified, []);
   });
 
   it('handles mixed classification correctly', async () => {
     await fs.writeFile(path.join(tmpDir, 'shared.gs'), '// shared', 'utf-8');
     await fs.writeFile(path.join(tmpDir, 'localOnly.gs'), '// local only', 'utf-8');
-    const fileOps = makeFileOps([gasFile('shared'), gasFile('remoteOnly')]);
+    await fs.writeFile(path.join(tmpDir, 'changed.gs'), '// changed locally', 'utf-8');
+    const fileOps = makeFileOps([
+      gasFile('shared', '// shared'),
+      gasFile('remoteOnly'),
+      gasFile('changed', '// original'),
+    ]);
 
     const status = await getStatus('scriptId', tmpDir, fileOps);
 
     assert.deepEqual(status.both.map(f => f.name), ['shared']);
     assert.deepEqual(status.localOnly.map(f => f.name), ['localOnly']);
     assert.deepEqual(status.remoteOnly.map(f => f.name), ['remoteOnly']);
+    assert.deepEqual(status.modified.map(f => f.name), ['changed']);
   });
 
   it('excludes gas-deploy.json from local files', async () => {
     await fs.writeFile(path.join(tmpDir, 'gas-deploy.json'), '{}', 'utf-8');
     await fs.writeFile(path.join(tmpDir, 'main.gs'), '// main', 'utf-8');
-    const fileOps = makeFileOps([gasFile('main')]);
+    const fileOps = makeFileOps([gasFile('main', '// main')]);
 
     const status = await getStatus('scriptId', tmpDir, fileOps);
 
@@ -114,7 +148,7 @@ describe('getStatus', () => {
   it('excludes hidden files (e.g. .gas-sync-state.json) from local files', async () => {
     await fs.writeFile(path.join(tmpDir, '.gas-sync-state.json'), '{}', 'utf-8');
     await fs.writeFile(path.join(tmpDir, 'main.gs'), '// main', 'utf-8');
-    const fileOps = makeFileOps([gasFile('main')]);
+    const fileOps = makeFileOps([gasFile('main', '// main')]);
 
     const status = await getStatus('scriptId', tmpDir, fileOps);
 
@@ -151,7 +185,7 @@ describe('push', () => {
     sinon.assert.calledOnce(fileOps.updateProjectFiles as sinon.SinonStub);
   });
 
-  it('sends ALL local files even when remote already has them', async () => {
+  it('sends ALL local files even when remote already has them (merge behavior)', async () => {
     const validGs = `function _main() { exports.fn = function() {}; }\n__defineModule__(_main, false);`;
     await fs.writeFile(path.join(tmpDir, 'existing.gs'), validGs, 'utf-8');
     await fs.writeFile(path.join(tmpDir, 'new.gs'), validGs, 'utf-8');
@@ -166,6 +200,39 @@ describe('push', () => {
     sinon.assert.calledOnce(fileOps.updateProjectFiles as sinon.SinonStub);
     const pushedFiles = (fileOps.updateProjectFiles as sinon.SinonStub).firstCall.args[1] as GASFile[];
     assert.equal(pushedFiles.length, 2);
+  });
+
+  it('preserves remote-only files by default (prune=false merge behavior)', async () => {
+    const validGs = `function _main() { exports.fn = function() {}; }\n__defineModule__(_main, false);`;
+    await fs.writeFile(path.join(tmpDir, 'local.gs'), validGs, 'utf-8');
+
+    // Remote has 'local' (matched) and 'ghost' (remote-only)
+    const fileOps = makeFileOps([gasFile('local', validGs), gasFile('ghost', '// remote only')]);
+    const result = await push('scriptId', tmpDir, fileOps, { skipValidation: true });
+
+    assert.ok(result.success);
+    // filesPushed only counts local files
+    assert.deepEqual(result.filesPushed, ['local']);
+    // But updateProjectFiles should receive both local + remote-only files
+    const pushedFiles = (fileOps.updateProjectFiles as sinon.SinonStub).firstCall.args[1] as GASFile[];
+    assert.equal(pushedFiles.length, 2, 'remote-only file should be preserved in payload');
+    const names = pushedFiles.map(f => f.name);
+    assert.ok(names.includes('ghost'), 'ghost remote-only file should be included');
+  });
+
+  it('removes remote-only files when prune=true', async () => {
+    const validGs = `function _main() { exports.fn = function() {}; }\n__defineModule__(_main, false);`;
+    await fs.writeFile(path.join(tmpDir, 'local.gs'), validGs, 'utf-8');
+
+    // Remote has 'local' + 'ghost' (remote-only)
+    const fileOps = makeFileOps([gasFile('local', validGs), gasFile('ghost', '// remote only')]);
+    const result = await push('scriptId', tmpDir, fileOps, { skipValidation: true, prune: true });
+
+    assert.ok(result.success);
+    // With prune=true, updateProjectFiles should only receive local files
+    const pushedFiles = (fileOps.updateProjectFiles as sinon.SinonStub).firstCall.args[1] as GASFile[];
+    assert.equal(pushedFiles.length, 1, 'remote-only file should be pruned');
+    assert.equal(pushedFiles[0].name, 'local');
   });
 
   it('returns error when localDir has no .gs/.html/.json files', async () => {

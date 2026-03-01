@@ -1,8 +1,8 @@
 /**
  * Status Tool for mcp-gas-deploy
  *
- * Compares local files vs remote GAS by file name.
- * Shows which files are local-only, remote-only, or shared.
+ * Compares local files vs remote GAS by file name AND content hash.
+ * Shows which files are local-only, remote-only, in-sync, or modified.
  */
 
 import path from 'node:path';
@@ -26,7 +26,7 @@ export interface StatusToolResult {
 
 export const STATUS_TOOL_DEFINITION = {
   name: 'status',
-  description: `Read-only: compare local .gs files vs remote GAS project. Shows localOnly, remoteOnly, shared counts. push and exec always push all local files.`,
+  description: `Read-only: compare local .gs files vs remote GAS project by name and content hash. Shows inSync, modified, localOnly, remoteOnly counts. push and exec always push all local files.`,
   annotations: { readOnlyHint: true },
   inputSchema: {
     type: 'object' as const,
@@ -76,7 +76,8 @@ export async function handleStatusTool(
     const status = await getStatus(scriptId, resolvedDir, fileOps);
 
     const parts: string[] = [];
-    if (status.both.length > 0) parts.push(`${status.both.length} shared`);
+    if (status.both.length > 0) parts.push(`${status.both.length} in sync`);
+    if (status.modified.length > 0) parts.push(`${status.modified.length} modified: ${status.modified.map(f => f.name).join(', ')}`);
     if (status.localOnly.length > 0) parts.push(`${status.localOnly.length} local only: ${status.localOnly.map(f => f.name).join(', ')}`);
     if (status.remoteOnly.length > 0) parts.push(`${status.remoteOnly.length} remote only: ${status.remoteOnly.map(f => f.name).join(', ')}`);
 
@@ -84,8 +85,8 @@ export async function handleStatusTool(
 
     const hints: Record<string, string> = {};
 
-    if (status.localOnly.length > 0) {
-      hints.next = 'local-only files exist — push or exec to sync';
+    if (status.localOnly.length > 0 || status.modified.length > 0) {
+      hints.next = 'local changes detected — push or exec to sync';
     } else if (status.remoteOnly.length > 0) {
       hints.next = 'remote-only files — pull to fetch';
     } else {

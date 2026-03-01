@@ -22,6 +22,7 @@ export interface PushToolParams {
   localDir?: string;
   dryRun?: boolean;
   skipValidation?: boolean;
+  prune?: boolean;
 }
 
 export interface PushToolResult {
@@ -71,6 +72,10 @@ skipValidation=true: ONLY for system shim files (require.gs, __mcp_exec.gs).`,
         type: 'boolean',
         description: 'ONLY for system shim files (require.gs, __mcp_exec.gs) — never use for regular modules',
       },
+      prune: {
+        type: 'boolean',
+        description: 'Remove remote-only files from GAS (files on remote not present locally). Default false (safe: preserves remote-only files). Pass true to explicitly delete ghost files.',
+      },
     },
     required: ['scriptId'],
   },
@@ -80,7 +85,7 @@ export async function handlePushTool(
   params: PushToolParams,
   fileOps: GASFileOperations
 ): Promise<PushToolResult> {
-  const { scriptId, localDir, dryRun, skipValidation } = params;
+  const { scriptId, localDir, dryRun, skipValidation, prune } = params;
 
   if (!SCRIPT_ID_PATTERN.test(scriptId)) {
     return {
@@ -104,7 +109,7 @@ export async function handlePushTool(
     };
   }
 
-  const result = await push(scriptId, resolvedDir, fileOps, { dryRun, skipValidation });
+  const result = await push(scriptId, resolvedDir, fileOps, { dryRun, skipValidation, prune });
 
   if (!result.success) {
     if (result.validationErrors && result.validationErrors.length > 0) {
@@ -149,7 +154,7 @@ export async function handlePushTool(
     hints: {
       next: dryRun
         ? `${result.filesPushed.length} files ${verb}. Run without dryRun to push.`
-        : `${result.filesPushed.length} files ${verb}. Run \`exec\` to verify or \`deploy\` to create a stable version.`,
+        : `${result.filesPushed.length} files ${verb}. Run \`exec\` to verify or \`deploy\` to create a stable version.${prune ? ' Remote-only files were pruned.' : ''}`,
     },
   };
 }

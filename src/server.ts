@@ -20,14 +20,17 @@ import { handleStatusTool, STATUS_TOOL_DEFINITION } from './tools/statusTool.js'
 import { handlePushTool, PUSH_TOOL_DEFINITION } from './tools/pushTool.js';
 import { handleExecTool, EXEC_TOOL_DEFINITION } from './tools/execTool.js';
 import { handleDeployTool, DEPLOY_TOOL_DEFINITION } from './tools/deployTool.js';
+import { handleProjectsTool, PROJECTS_TOOL_DEFINITION } from './tools/projectsTool.js';
 import { GASDeployOperations } from './api/gasDeployOperations.js';
+import { GASProjectOperations } from './api/gasProjectOperations.js';
 
 // Singleton chain — shared across all tool calls to reuse the token cache and avoid re-auth.
-// authOps is injected into both fileOps and deployOps so all GAS API calls share one session.
+// authOps is injected into fileOps, deployOps, and projectOps so all GAS API calls share one session.
 const sessionManager = new SessionManager();
 const authOps = new GASAuthOperations(sessionManager);
 const fileOps = new GASFileOperations(authOps);
 const deployOps = new GASDeployOperations(authOps);
+const projectOps = new GASProjectOperations(authOps);
 
 // Create MCP server
 const server = new Server(
@@ -45,6 +48,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       PUSH_TOOL_DEFINITION,
       EXEC_TOOL_DEFINITION,
       DEPLOY_TOOL_DEFINITION,
+      PROJECTS_TOOL_DEFINITION,
     ],
   };
 });
@@ -99,6 +103,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'deploy': {
         const result = await handleDeployTool(args as unknown as Parameters<typeof handleDeployTool>[0], fileOps, deployOps);
+        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+      }
+
+      case 'projects': {
+        const result = await handleProjectsTool(args as unknown as Parameters<typeof handleProjectsTool>[0], projectOps);
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       }
 

@@ -25,8 +25,8 @@ function makeFileOps(remoteFiles: GASFile[]): GASFileOperations {
   } as unknown as GASFileOperations;
 }
 
-function gasFile(name: string): GASFile {
-  return { name, source: `// ${name}`, type: 'SERVER_JS' };
+function gasFile(name: string, source = `// ${name}`): GASFile {
+  return { name, source, type: 'SERVER_JS' };
 }
 
 describe('handleStatusTool', () => {
@@ -82,6 +82,19 @@ describe('handleStatusTool', () => {
       assert.ok(result.hints.next?.includes('push or exec'), `got: ${result.hints.next}`);
     });
 
+    it('sets next hint to "push or exec to sync" when modified files exist', async () => {
+      await fs.writeFile(path.join(tmpDir, 'main.gs'), '// updated locally', 'utf-8');
+      const fileOps = makeFileOps([gasFile('main', '// original on remote')]);
+
+      const result = await handleStatusTool(
+        { scriptId: VALID_SCRIPT_ID, localDir: tmpDir },
+        fileOps
+      );
+
+      assert.equal(result.success, true);
+      assert.ok(result.hints.next?.includes('push or exec'), `got: ${result.hints.next}`);
+    });
+
     it('sets next hint to "pull to fetch" when remote-only files exist', async () => {
       // Empty localDir — no local .gs files
       const fileOps = makeFileOps([gasFile('remote')]);
@@ -95,9 +108,9 @@ describe('handleStatusTool', () => {
       assert.ok(result.hints.next?.includes('pull to fetch'), `got: ${result.hints.next}`);
     });
 
-    it('sets next hint to "in sync" when local and remote file names match', async () => {
+    it('sets next hint to "in sync" when local and remote file content match', async () => {
       await fs.writeFile(path.join(tmpDir, 'shared.gs'), '// shared', 'utf-8');
-      const fileOps = makeFileOps([gasFile('shared')]);
+      const fileOps = makeFileOps([gasFile('shared', '// shared')]);
 
       const result = await handleStatusTool(
         { scriptId: VALID_SCRIPT_ID, localDir: tmpDir },
@@ -139,10 +152,9 @@ describe('handleStatusTool', () => {
   // --- Summary formatting ---
 
   describe('summary', () => {
-    it('shows shared count and local-only file names in summary', async () => {
+    it('shows "in sync" count in summary when content matches', async () => {
       await fs.writeFile(path.join(tmpDir, 'shared.gs'), '// shared', 'utf-8');
-      await fs.writeFile(path.join(tmpDir, 'local-only.gs'), '// local', 'utf-8');
-      const fileOps = makeFileOps([gasFile('shared')]);
+      const fileOps = makeFileOps([gasFile('shared', '// shared')]);
 
       const result = await handleStatusTool(
         { scriptId: VALID_SCRIPT_ID, localDir: tmpDir },
@@ -150,7 +162,33 @@ describe('handleStatusTool', () => {
       );
 
       assert.equal(result.success, true);
-      assert.ok(result.summary.includes('shared'), `summary missing 'shared': ${result.summary}`);
+      assert.ok(result.summary.includes('in sync'), `summary missing 'in sync': ${result.summary}`);
+    });
+
+    it('shows modified file names in summary when content differs', async () => {
+      await fs.writeFile(path.join(tmpDir, 'changed.gs'), '// new version', 'utf-8');
+      const fileOps = makeFileOps([gasFile('changed', '// old version')]);
+
+      const result = await handleStatusTool(
+        { scriptId: VALID_SCRIPT_ID, localDir: tmpDir },
+        fileOps
+      );
+
+      assert.equal(result.success, true);
+      assert.ok(result.summary.includes('modified'), `summary missing 'modified': ${result.summary}`);
+      assert.ok(result.summary.includes('changed'), `summary missing file name 'changed': ${result.summary}`);
+    });
+
+    it('shows local-only file names in summary', async () => {
+      await fs.writeFile(path.join(tmpDir, 'local-only.gs'), '// local', 'utf-8');
+      const fileOps = makeFileOps([]);
+
+      const result = await handleStatusTool(
+        { scriptId: VALID_SCRIPT_ID, localDir: tmpDir },
+        fileOps
+      );
+
+      assert.equal(result.success, true);
       assert.ok(result.summary.includes('local-only'), `summary missing 'local-only': ${result.summary}`);
     });
 
@@ -179,6 +217,21 @@ describe('handleStatusTool', () => {
         result.summary.includes('remote-script'),
         `summary missing 'remote-script': ${result.summary}`
       );
+    });
+
+    it('status object includes modified array', async () => {
+      await fs.writeFile(path.join(tmpDir, 'code.gs'), '// new', 'utf-8');
+      const fileOps = makeFileOps([gasFile('code', '// old')]);
+
+      const result = await handleStatusTool(
+        { scriptId: VALID_SCRIPT_ID, localDir: tmpDir },
+        fileOps
+      );
+
+      assert.equal(result.success, true);
+      assert.ok(result.status?.modified, 'status.modified should exist');
+      assert.equal(result.status!.modified.length, 1);
+      assert.equal(result.status!.modified[0].name, 'code');
     });
   });
 });
