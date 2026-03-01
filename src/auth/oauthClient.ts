@@ -47,6 +47,8 @@ export class OAuthClient {
   private sessionManager: SessionManager;
   private oauth2Client: OAuth2Client;
   private server?: http.Server;
+  // codeVerifier and state are ephemeral per-flow PKCE values — OAuthClient must be
+  // instantiated fresh per login flow (not a singleton).
   private codeVerifier?: string;
   private state?: string;
 

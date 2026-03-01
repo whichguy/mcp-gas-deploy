@@ -106,8 +106,15 @@ async function listCachedEmails(): Promise<string[]> {
 
 // --- Session Manager ---
 
+/**
+ * Session model: tokens are persisted per-email as JSON files under TOKEN_CACHE_DIR.
+ * On first public call, ensureSessionIdConfirmed() scans disk for an existing valid
+ * session and adopts its sessionId. Concurrent token refreshes are deduplicated via
+ * refreshPromise (refresh-in-flight guard).
+ */
 export class SessionManager {
   private sessionId: string;
+  // false until first public call — triggers lazy disk scan via ensureSessionIdConfirmed()
   private sessionIdConfirmed = false;
   private clientId: string;
 

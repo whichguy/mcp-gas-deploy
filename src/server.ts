@@ -22,7 +22,8 @@ import { handleExecTool, EXEC_TOOL_DEFINITION } from './tools/execTool.js';
 import { handleDeployTool, DEPLOY_TOOL_DEFINITION } from './tools/deployTool.js';
 import { GASDeployOperations } from './api/gasDeployOperations.js';
 
-// Shared instances for this server process
+// Singleton chain — shared across all tool calls to reuse the token cache and avoid re-auth.
+// authOps is injected into both fileOps and deployOps so all GAS API calls share one session.
 const sessionManager = new SessionManager();
 const authOps = new GASAuthOperations(sessionManager);
 const fileOps = new GASFileOperations(authOps);

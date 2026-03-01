@@ -152,6 +152,8 @@ export async function handleDeployTool(
     console.error(`Pre-deploy push skipped: ${message}`);
   }
 
+  // Deploy lifecycle (post-push): create version snapshot → find/update or create
+  // web app deployment → pin to version → cache URL in gas-deploy.json.
   try {
     // Create version snapshot
     const versionDesc = description ?? `${to} deploy by mcp-gas-deploy`;
