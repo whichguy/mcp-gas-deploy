@@ -31,13 +31,13 @@ function buildStalenessHints(
       && (info.stagingVersionNumber == null || info.prodVersionNumber == null
           || info.stagingVersionNumber !== info.prodVersionNumber)) {
     const h = Math.round(prodAge / (60 * 60 * 1000));
-    hints.staleprod = `prod is ${h}h behind staging (v${info.stagingVersionNumber ?? '?'}) — consider: action=promote from=staging to=prod`;
+    hints.staleprod = `prod is ${h}h behind staging (v${info.stagingVersionNumber ?? '?'}) — consider: action=promote`;
   }
 
   // local changes + staging stale
   if (hasLocalChanges && stagingAge !== null && stagingAge > STALE_THRESHOLD_MS) {
     const h = Math.round(stagingAge / (60 * 60 * 1000));
-    hints.staledev = `${h}h since last staging deploy with local changes pending — consider: push then action=deploy to=staging`;
+    hints.staledev = `${h}h since last staging deploy with local changes pending — consider: push then action=deploy`;
   }
 
   return hints;
