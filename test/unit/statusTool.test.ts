@@ -338,12 +338,15 @@ describe('handleStatusTool', () => {
       assert.equal(slot0.versionNumber, 1);
       assert.equal(slot0.isActive, false, 'slot 0 should not be active');
       assert.ok(slot0.note.includes('rollback'), `slot 0 note should mention rollback, got: ${slot0.note}`);
+      assert.ok(slot0.url.includes('slot0'), `slot 0 url should contain deploymentId, got: ${slot0.url}`);
+      assert.ok(slot0.url.endsWith('/exec'), `slot 0 url should end with /exec, got: ${slot0.url}`);
 
       const slot1 = result.deployments!.stagingSlots![1];
       assert.equal(slot1.slotIndex, 1);
       assert.equal(slot1.versionNumber, 2);
       assert.equal(slot1.isActive, true, 'slot 1 should be active');
       assert.ok(slot1.note.includes('active'), `slot 1 note should be "active", got: ${slot1.note}`);
+      assert.ok(slot1.url.includes('slot1'), `slot 1 url should contain deploymentId, got: ${slot1.url}`);
     });
 
     it('omits stagingSlots when stagingSlotIds is absent', async () => {

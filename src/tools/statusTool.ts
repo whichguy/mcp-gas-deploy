@@ -51,6 +51,7 @@ export interface StatusToolParams {
 export interface DeploymentSlot {
   slotIndex: number;           // 0-based (slot 1 = index 0)
   deploymentId: string;
+  url: string;                 // web app URL — constructed from deploymentId (/exec suffix)
   versionNumber: number;
   deployedAt: string;          // ISO timestamp from slot description field
   isActive: boolean;           // true when pointer currently serves this slot's version
@@ -193,6 +194,7 @@ export async function handleStatusTool(
         urls.stagingSlots = slotIds.map((id, i): DeploymentSlot => ({
           slotIndex: i,
           deploymentId: id,
+          url: `https://script.google.com/macros/s/${id}/exec`,
           versionNumber: slotVersions[i] ?? 0,
           deployedAt: slotDescriptions[i] ?? '',
           isActive: i === activeIndex,
@@ -211,6 +213,7 @@ export async function handleStatusTool(
         urls.prodSlots = slotIds.map((id, i): DeploymentSlot => ({
           slotIndex: i,
           deploymentId: id,
+          url: `https://script.google.com/macros/s/${id}/exec`,
           versionNumber: slotVersions[i] ?? 0,
           deployedAt: slotDescriptions[i] ?? '',
           isActive: i === activeIndex,
