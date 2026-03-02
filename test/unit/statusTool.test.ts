@@ -305,6 +305,97 @@ describe('handleStatusTool', () => {
       assert.equal(result.success, true);
       assert.ok(!result.deployments, 'deployments should be absent when no config exists');
     });
+
+    it('surfaces stagingSlots with correct versions and isActive flag', async () => {
+      const fileOps = makeFileOps([]);
+      const now = Date.now();
+      const ts1 = new Date(now - 2 * 60 * 60 * 1000).toISOString();
+      const ts2 = new Date(now - 1 * 60 * 60 * 1000).toISOString();
+
+      await writeDeployConfig(tmpDir, {
+        [VALID_SCRIPT_ID]: {
+          stagingDeploymentId: 'AKfycbPointer',
+          stagingVersionNumber: 2,
+          stagingSlotIds: ['slot0', 'slot1'],
+          stagingSlotVersions: [1, 2],
+          stagingSlotDescriptions: [ts1, ts2],
+          stagingSlotConsumerVersions: [1, 2],
+          stagingActiveSlotIndex: 1,
+        },
+      });
+
+      const result = await handleStatusTool(
+        { scriptId: VALID_SCRIPT_ID, localDir: tmpDir },
+        fileOps
+      );
+
+      assert.equal(result.success, true);
+      assert.ok(result.deployments?.stagingSlots, 'stagingSlots should be present');
+      assert.equal(result.deployments!.stagingSlots!.length, 2, 'should have 2 staging slots');
+
+      const slot0 = result.deployments!.stagingSlots![0];
+      assert.equal(slot0.slotIndex, 0);
+      assert.equal(slot0.versionNumber, 1);
+      assert.equal(slot0.isActive, false, 'slot 0 should not be active');
+      assert.ok(slot0.note.includes('rollback'), `slot 0 note should mention rollback, got: ${slot0.note}`);
+
+      const slot1 = result.deployments!.stagingSlots![1];
+      assert.equal(slot1.slotIndex, 1);
+      assert.equal(slot1.versionNumber, 2);
+      assert.equal(slot1.isActive, true, 'slot 1 should be active');
+      assert.ok(slot1.note.includes('active'), `slot 1 note should be "active", got: ${slot1.note}`);
+    });
+
+    it('omits stagingSlots when stagingSlotIds is absent', async () => {
+      const fileOps = makeFileOps([]);
+      await writeDeployConfig(tmpDir, {
+        [VALID_SCRIPT_ID]: {
+          stagingDeploymentId: 'AKfycbPointer',
+          stagingVersionNumber: 1,
+        },
+      });
+
+      const result = await handleStatusTool(
+        { scriptId: VALID_SCRIPT_ID, localDir: tmpDir },
+        fileOps
+      );
+
+      assert.equal(result.success, true);
+      assert.ok(!result.deployments?.stagingSlots, 'stagingSlots should be absent when no slot IDs configured');
+    });
+
+    it('surfaces prodSlots with correct isActive flag', async () => {
+      const fileOps = makeFileOps([]);
+      const ts = new Date().toISOString();
+
+      await writeDeployConfig(tmpDir, {
+        [VALID_SCRIPT_ID]: {
+          prodDeploymentId: 'AKfycbProdPointer',
+          prodVersionNumber: 3,
+          prodSlotIds: ['prodSlot0', 'prodSlot1', 'prodSlot2'],
+          prodSlotVersions: [1, 2, 3],
+          prodSlotDescriptions: [ts, ts, ts],
+          prodSlotConsumerVersions: [null, null, null],
+          prodActiveSlotIndex: 2,
+        },
+      });
+
+      const result = await handleStatusTool(
+        { scriptId: VALID_SCRIPT_ID, localDir: tmpDir },
+        fileOps
+      );
+
+      assert.equal(result.success, true);
+      assert.ok(result.deployments?.prodSlots, 'prodSlots should be present');
+      assert.equal(result.deployments!.prodSlots!.length, 3, 'should have 3 prod slots');
+
+      const activeSlot = result.deployments!.prodSlots![2];
+      assert.equal(activeSlot.isActive, true, 'slot 2 should be active');
+      assert.equal(activeSlot.versionNumber, 3);
+
+      assert.equal(result.deployments!.prodSlots![0].isActive, false);
+      assert.equal(result.deployments!.prodSlots![1].isActive, false);
+    });
   });
 
   // --- Summary formatting ---
