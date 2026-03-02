@@ -193,7 +193,7 @@ describe('consumer update non-fatal (via handleDeployTool)', () => {
     } as unknown as GASDeployOperations;
 
     const result = await handleDeployTool(
-      { scriptId: VALID_SCRIPT_ID, localDir: tmpDir, action: 'deploy', to: 'staging' },
+      { scriptId: VALID_SCRIPT_ID, localDir: tmpDir, action: 'deploy' },
       fileOps,
       deployOps
     );

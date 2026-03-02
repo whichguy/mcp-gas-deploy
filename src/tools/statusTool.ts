@@ -48,6 +48,16 @@ export interface StatusToolParams {
   localDir?: string;
 }
 
+export interface DeploymentSlot {
+  slotIndex: number;           // 0-based (slot 1 = index 0)
+  deploymentId: string;
+  versionNumber: number;
+  deployedAt: string;          // ISO timestamp from slot description field
+  isActive: boolean;           // true when pointer currently serves this slot's version
+  consumerVersionNumber?: number | null;
+  note: string;                // e.g. "active" or "rollback available"
+}
+
 export interface DeploymentUrls {
   /** HEAD deployment — always points to the latest push; suffix /dev; used by exec */
   head?: { url?: string; deploymentId?: string; note: string };
@@ -55,6 +65,10 @@ export interface DeploymentUrls {
   staging?: { url?: string; deploymentId?: string; versionNumber?: number; note: string };
   /** Prod deployment — pinned to a specific version; suffix /exec; live traffic */
   prod?: { url?: string; deploymentId?: string; versionNumber?: number; note: string };
+  /** Circular buffer slots for staging (omitted when stagingSlotIds is absent or empty) */
+  stagingSlots?: DeploymentSlot[];
+  /** Circular buffer slots for prod (omitted when prodSlotIds is absent or empty) */
+  prodSlots?: DeploymentSlot[];
 }
 
 export interface StatusToolResult {
@@ -168,7 +182,44 @@ export async function handleStatusTool(
           note: `versioned (/exec) — v${deployInfo.prodVersionNumber ?? '?'}; live traffic`,
         };
       }
-      if (urls.head || urls.staging || urls.prod) deployments = urls;
+      // Surface circular buffer slot state — omit entirely when slotIds absent or empty
+      if (deployInfo.stagingSlotIds && deployInfo.stagingSlotIds.length > 0) {
+        const slotIds = deployInfo.stagingSlotIds;
+        const slotVersions = deployInfo.stagingSlotVersions ?? [];
+        const slotDescriptions = deployInfo.stagingSlotDescriptions ?? [];
+        const slotConsumerVersions = deployInfo.stagingSlotConsumerVersions ?? [];
+        const activeIndex = deployInfo.stagingActiveSlotIndex ?? 0;
+
+        urls.stagingSlots = slotIds.map((id, i): DeploymentSlot => ({
+          slotIndex: i,
+          deploymentId: id,
+          versionNumber: slotVersions[i] ?? 0,
+          deployedAt: slotDescriptions[i] ?? '',
+          isActive: i === activeIndex,
+          consumerVersionNumber: slotConsumerVersions[i] ?? null,
+          note: i === activeIndex ? 'active' : 'rollback available',
+        }));
+      }
+
+      if (deployInfo.prodSlotIds && deployInfo.prodSlotIds.length > 0) {
+        const slotIds = deployInfo.prodSlotIds;
+        const slotVersions = deployInfo.prodSlotVersions ?? [];
+        const slotDescriptions = deployInfo.prodSlotDescriptions ?? [];
+        const slotConsumerVersions = deployInfo.prodSlotConsumerVersions ?? [];
+        const activeIndex = deployInfo.prodActiveSlotIndex ?? 0;
+
+        urls.prodSlots = slotIds.map((id, i): DeploymentSlot => ({
+          slotIndex: i,
+          deploymentId: id,
+          versionNumber: slotVersions[i] ?? 0,
+          deployedAt: slotDescriptions[i] ?? '',
+          isActive: i === activeIndex,
+          consumerVersionNumber: slotConsumerVersions[i] ?? null,
+          note: i === activeIndex ? 'active' : 'rollback available',
+        }));
+      }
+
+      if (urls.head || urls.staging || urls.prod || urls.stagingSlots || urls.prodSlots) deployments = urls;
     } catch {
       // Suppress — deployment info is optional; missing config is not a status error
     }

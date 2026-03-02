@@ -1,14 +1,17 @@
 /**
  * Unit tests for deployTool promote action
  *
+ * promote is always staging → prod — no from/to params required.
  * Uses real temp directories for gas-deploy.json (sinon cannot stub ESM named exports).
  * API operations (GASDeployOperations, GASFileOperations) are mocked via sinon stubs.
  *
  * Verifies:
- *  - updateDeployment called with correct versionNumber
+ *  - updateDeployment called with correct versionNumber (prod pointer)
  *  - createVersion NOT called (promote re-points an existing version)
  *  - response includes previousVersionNumber
- *  - errors surfaced cleanly (missing deployment, HEAD-only source, same env)
+ *  - prod slot written on promote (createDeployment called for first slot)
+ *  - errors surfaced cleanly (missing staging deployment, HEAD-only source)
+ *  - consumer update surfaced in response (non-fatal)
  */
 
 import { describe, it, beforeEach, afterEach } from 'mocha';
@@ -18,7 +21,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { handleDeployTool } from '../src/tools/deployTool.js';
-import { writeDeployConfig } from '../src/config/deployConfig.js';
+import { writeDeployConfig, readDeployConfig } from '../src/config/deployConfig.js';
 import type { GASDeployOperations } from '../src/api/gasDeployOperations.js';
 import type { GASFileOperations } from '../src/api/gasFileOperations.js';
 import type { DeploymentInfo } from '../src/config/deployConfig.js';
@@ -37,7 +40,7 @@ function makeDeployOps(overrides: Partial<Record<keyof GASDeployOperations, unkn
       webAppUrl: 'https://script.google.com/macros/s/targetDeploy/exec',
     }),
     getOrCreateHeadDeployment: sinon.stub().resolves({ deploymentId: 'head', versionNumber: 0 }),
-    createDeployment: sinon.stub().resolves({ deploymentId: 'newDeploy', versionNumber: 5, updateTime: new Date().toISOString() }),
+    createDeployment: sinon.stub().resolves({ deploymentId: 'newProdSlot', versionNumber: 5, updateTime: new Date().toISOString() }),
     getDeploymentVersionNumber: sinon.stub().resolves(5),
     ...overrides,
   } as unknown as GASDeployOperations;
@@ -83,10 +86,10 @@ describe('deployTool promote action', () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
-  it('calls updateDeployment with source versionNumber', async () => {
+  it('calls updateDeployment with source versionNumber (prod pointer)', async () => {
     const deployOps = makeDeployOps();
     const result = await handleDeployTool(
-      { scriptId: VALID_SCRIPT_ID, localDir: tmpDir, action: 'promote', from: 'staging', to: 'prod' },
+      { scriptId: VALID_SCRIPT_ID, localDir: tmpDir, action: 'promote' },
       makeFileOps(),
       deployOps
     );
@@ -96,14 +99,15 @@ describe('deployTool promote action', () => {
     assert.equal(result.versionNumber, 5);
 
     const updateCall = deployOps.updateDeployment as sinon.SinonStub;
-    assert.ok(updateCall.calledOnce, 'updateDeployment should be called once');
+    // First updateDeployment call should be for the prod pointer with versionNumber=5
+    assert.ok(updateCall.called, 'updateDeployment should be called for prod pointer');
     assert.equal(updateCall.firstCall.args[2], 5, 'updateDeployment should receive versionNumber=5');
   });
 
   it('does NOT call createVersion', async () => {
     const deployOps = makeDeployOps();
     await handleDeployTool(
-      { scriptId: VALID_SCRIPT_ID, localDir: tmpDir, action: 'promote', from: 'staging', to: 'prod' },
+      { scriptId: VALID_SCRIPT_ID, localDir: tmpDir, action: 'promote' },
       makeFileOps(),
       deployOps
     );
@@ -117,7 +121,7 @@ describe('deployTool promote action', () => {
   it('returns previousVersionNumber from gas-deploy.json', async () => {
     const deployOps = makeDeployOps();
     const result = await handleDeployTool(
-      { scriptId: VALID_SCRIPT_ID, localDir: tmpDir, action: 'promote', from: 'staging', to: 'prod' },
+      { scriptId: VALID_SCRIPT_ID, localDir: tmpDir, action: 'promote' },
       makeFileOps(),
       deployOps
     );
@@ -130,14 +134,12 @@ describe('deployTool promote action', () => {
     const deployOps = makeDeployOps();
     const beforeTs = Date.now();
     await handleDeployTool(
-      { scriptId: VALID_SCRIPT_ID, localDir: tmpDir, action: 'promote', from: 'staging', to: 'prod' },
+      { scriptId: VALID_SCRIPT_ID, localDir: tmpDir, action: 'promote' },
       makeFileOps(),
       deployOps
     );
     const afterTs = Date.now();
 
-    // Read the written config
-    const { readDeployConfig } = await import('../src/config/deployConfig.js');
     const config = await readDeployConfig(tmpDir);
     const info = config[VALID_SCRIPT_ID];
 
@@ -150,10 +152,31 @@ describe('deployTool promote action', () => {
     assert.ok(ts <= afterTs + 5000, 'prodDeployedAt should not be far in the future');
   });
 
-  it('returns sourceEnv and targetEnv', async () => {
+  it('writes prod slot to gas-deploy.json on first promote (Track B)', async () => {
+    const deployOps = makeDeployOps();
+    await handleDeployTool(
+      { scriptId: VALID_SCRIPT_ID, localDir: tmpDir, action: 'promote' },
+      makeFileOps(),
+      deployOps
+    );
+
+    const config = await readDeployConfig(tmpDir);
+    const info = config[VALID_SCRIPT_ID];
+
+    assert.ok(info?.prodSlotIds?.length === 1, 'prodSlotIds should have 1 slot after first promote');
+    assert.equal(info?.prodSlotVersions?.[0], 5, 'prodSlotVersions[0] should be 5');
+    assert.ok(info?.prodSlotDescriptions?.[0], 'prodSlotDescriptions[0] should be set');
+    assert.equal(info?.prodActiveSlotIndex, 0, 'prodActiveSlotIndex should be 0');
+
+    // createDeployment should be called for the new slot
+    const createCall = deployOps.createDeployment as sinon.SinonStub;
+    assert.ok(createCall.calledOnce, 'createDeployment should be called once for first prod slot');
+  });
+
+  it('returns sourceEnv=staging and targetEnv=prod', async () => {
     const deployOps = makeDeployOps();
     const result = await handleDeployTool(
-      { scriptId: VALID_SCRIPT_ID, localDir: tmpDir, action: 'promote', from: 'staging', to: 'prod' },
+      { scriptId: VALID_SCRIPT_ID, localDir: tmpDir, action: 'promote' },
       makeFileOps(),
       deployOps
     );
@@ -162,25 +185,13 @@ describe('deployTool promote action', () => {
     assert.equal(result.targetEnv, 'prod');
   });
 
-  it('errors when from and to are the same', async () => {
-    const deployOps = makeDeployOps();
-    const result = await handleDeployTool(
-      { scriptId: VALID_SCRIPT_ID, localDir: tmpDir, action: 'promote', from: 'prod', to: 'prod' },
-      makeFileOps(),
-      deployOps
-    );
-
-    assert.equal(result.success, false);
-    assert.ok(result.error?.includes('differ'), `got: ${result.error}`);
-  });
-
-  it('errors when source env has no deploymentId', async () => {
+  it('errors when staging deployment is missing', async () => {
     const noStagingInfo: DeploymentInfo = { ...baseInfo, stagingDeploymentId: undefined };
     await writeDeployConfig(tmpDir, { [VALID_SCRIPT_ID]: noStagingInfo });
 
     const deployOps = makeDeployOps();
     const result = await handleDeployTool(
-      { scriptId: VALID_SCRIPT_ID, localDir: tmpDir, action: 'promote', from: 'staging', to: 'prod' },
+      { scriptId: VALID_SCRIPT_ID, localDir: tmpDir, action: 'promote' },
       makeFileOps(),
       deployOps
     );
@@ -194,7 +205,7 @@ describe('deployTool promote action', () => {
       getDeploymentVersionNumber: sinon.stub().rejects(new Error('HEAD-only')),
     });
     const result = await handleDeployTool(
-      { scriptId: VALID_SCRIPT_ID, localDir: tmpDir, action: 'promote', from: 'staging', to: 'prod' },
+      { scriptId: VALID_SCRIPT_ID, localDir: tmpDir, action: 'promote' },
       makeFileOps(),
       deployOps
     );
@@ -203,37 +214,13 @@ describe('deployTool promote action', () => {
     assert.ok(result.error?.includes('Promote failed'), `got: ${result.error}`);
   });
 
-  it('errors when from is missing', async () => {
-    const deployOps = makeDeployOps();
-    const result = await handleDeployTool(
-      { scriptId: VALID_SCRIPT_ID, localDir: tmpDir, action: 'promote', to: 'prod' },
-      makeFileOps(),
-      deployOps
-    );
-
-    assert.equal(result.success, false);
-    assert.ok(result.error?.includes('from'), `got: ${result.error}`);
-  });
-
-  it('errors when to is missing', async () => {
-    const deployOps = makeDeployOps();
-    const result = await handleDeployTool(
-      { scriptId: VALID_SCRIPT_ID, localDir: tmpDir, action: 'promote', from: 'staging' },
-      makeFileOps(),
-      deployOps
-    );
-
-    assert.equal(result.success, false);
-    assert.ok(result.error?.includes('to'), `got: ${result.error}`);
-  });
-
-  it('errors when target env has no deploymentId', async () => {
+  it('errors when prod deployment is missing', async () => {
     const noProdInfo: DeploymentInfo = { ...baseInfo, prodDeploymentId: undefined };
     await writeDeployConfig(tmpDir, { [VALID_SCRIPT_ID]: noProdInfo });
 
     const deployOps = makeDeployOps();
     const result = await handleDeployTool(
-      { scriptId: VALID_SCRIPT_ID, localDir: tmpDir, action: 'promote', from: 'staging', to: 'prod' },
+      { scriptId: VALID_SCRIPT_ID, localDir: tmpDir, action: 'promote' },
       makeFileOps(),
       deployOps
     );
@@ -242,15 +229,71 @@ describe('deployTool promote action', () => {
     assert.ok(result.error?.includes('prod'), `got: ${result.error}`);
   });
 
-  it('includes rollback hint with previousVersionNumber', async () => {
+  it('includes rollback hint pointing to action=rollback to="prod"', async () => {
     const deployOps = makeDeployOps();
     const result = await handleDeployTool(
-      { scriptId: VALID_SCRIPT_ID, localDir: tmpDir, action: 'promote', from: 'staging', to: 'prod' },
+      { scriptId: VALID_SCRIPT_ID, localDir: tmpDir, action: 'promote' },
       makeFileOps(),
       deployOps
     );
 
     assert.equal(result.success, true);
-    assert.ok(result.hints.rollback?.includes('3'), `rollback hint should mention v3, got: ${result.hints.rollback}`);
+    assert.ok(
+      result.hints.rollback?.includes('rollback'),
+      `rollback hint should mention rollback action, got: ${result.hints.rollback}`
+    );
+    assert.ok(
+      result.hints.rollback?.includes('prod'),
+      `rollback hint should mention prod environment, got: ${result.hints.rollback}`
+    );
+  });
+
+  it('consumer update succeeds when prodConsumerScriptId and userSymbol are set', async () => {
+    const infoWithConsumer: DeploymentInfo = {
+      ...baseInfo,
+      userSymbol: 'SheetsChat',
+      prodConsumerScriptId: 'consumerProdScriptId',
+      prodConsumerDeploymentId: 'AKfycbConsumerProd',
+    };
+    await writeDeployConfig(tmpDir, { [VALID_SCRIPT_ID]: infoWithConsumer });
+
+    const deployOps = makeDeployOps({
+      createVersion: sinon.stub().resolves({ scriptId: 'consumerProdScriptId', versionNumber: 7 }),
+    });
+    const fileOps = makeFileOps();
+
+    const result = await handleDeployTool(
+      { scriptId: VALID_SCRIPT_ID, localDir: tmpDir, action: 'promote' },
+      fileOps,
+      deployOps
+    );
+
+    assert.equal(result.success, true, `expected success, got error: ${result.error}`);
+    assert.ok(result.consumerUpdate, 'consumerUpdate should be present');
+    assert.equal(result.consumerUpdate?.scriptId, 'consumerProdScriptId');
+    assert.ok(!result.consumerUpdate?.error, `unexpected consumer error: ${result.consumerUpdate?.error}`);
+  });
+
+  it('consumer failure is non-fatal — promote succeeds with consumerUpdate.error', async () => {
+    const infoWithConsumer: DeploymentInfo = {
+      ...baseInfo,
+      userSymbol: 'SheetsChat',
+      prodConsumerScriptId: 'consumerProdScriptId',
+      prodConsumerDeploymentId: 'AKfycbConsumerProd',
+    };
+    await writeDeployConfig(tmpDir, { [VALID_SCRIPT_ID]: infoWithConsumer });
+
+    const deployOps = makeDeployOps({
+      createVersion: sinon.stub().rejects(new Error('consumer createVersion failed')),
+    });
+
+    const result = await handleDeployTool(
+      { scriptId: VALID_SCRIPT_ID, localDir: tmpDir, action: 'promote' },
+      makeFileOps(),
+      deployOps
+    );
+
+    assert.equal(result.success, true, 'promote should succeed even when consumer fails');
+    assert.ok(result.consumerUpdate?.error?.includes('non-fatal'), `expected non-fatal error, got: ${result.consumerUpdate?.error}`);
   });
 });
