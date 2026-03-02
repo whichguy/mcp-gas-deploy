@@ -154,12 +154,17 @@ export class SessionManager {
         ? credentials.expiry_date - 60000
         : Date.now() + 3600000;
 
+      if (!credentials.access_token) {
+        throw new Error('Token refresh succeeded but no access_token was returned');
+      }
+
       return {
-        access_token: credentials.access_token!,
+        access_token: credentials.access_token,
         refresh_token: credentials.refresh_token || session.tokens.refresh_token,
         expires_at: expiresAt,
         scope: credentials.scope || session.tokens.scope,
         token_type: credentials.token_type || 'Bearer',
+        client_id: session.tokens.client_id,
       };
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
