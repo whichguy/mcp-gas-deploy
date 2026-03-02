@@ -276,7 +276,7 @@ export async function handleDeployTool(
         })),
         versionBudget: { used, remaining: limit - used, limit },
         hints: {
-          next: `${used} version(s) used (${limit - used} remaining of ${limit} cap). Use action=rollback with versionNumber to revert.`,
+          next: `${used} version(s) used (${limit - used} remaining of ${limit} cap). Use action=rollback with to="staging" or to="prod" to step back one slot.`,
         },
       };
     } catch (error: unknown) {
