@@ -64,8 +64,6 @@ export interface DeployToolParams {
   localDir?: string;
   action?: 'deploy' | 'list-versions' | 'rollback' | 'promote';
   to?: 'staging' | 'prod';
-  from?: 'staging' | 'prod';
-  versionNumber?: number;
   description?: string;
 }
 
@@ -103,10 +101,10 @@ export const DEPLOY_TOOL_DEFINITION = {
   name: 'deploy',
   description: `Manage GAS versioned deployments.
 
-action=deploy (default): Push files and create a versioned web app deployment (staging | prod).
+action=deploy (default): Push files and create a versioned web app deployment to staging. Maintains a 4-slot circular buffer for rollback history.
 action=list-versions: List all version snapshots and remaining budget (cap: 200 per project).
-action=rollback: Revert staging or prod deployment to a prior version (instant, no file push).
-action=promote: Re-point target env to source env's existing versionNumber — no new version consumed, no push required.
+action=rollback: Revert staging or prod deployment one step back in the circular buffer (instant, no file push). Use to=staging or to=prod.
+action=promote: Promote staging to prod — re-points the prod deployment to the current staging version. Always staging→prod.
 
 Pre-deploy: validates CommonJS, pushes all local files. Stores deployment URL for exec.`,
   inputSchema: {
@@ -128,16 +126,7 @@ Pre-deploy: validates CommonJS, pushes all local files. Stores deployment URL fo
       to: {
         type: 'string',
         enum: ['staging', 'prod'],
-        description: 'Target environment — required for deploy, rollback, and promote',
-      },
-      from: {
-        type: 'string',
-        enum: ['staging', 'prod'],
-        description: 'Source environment — required for promote',
-      },
-      versionNumber: {
-        type: 'number',
-        description: 'Version number to roll back to — required for rollback. Use list-versions to see available versions.',
+        description: 'Target environment — required for rollback (staging|prod)',
       },
       description: {
         type: 'string',
@@ -148,6 +137,45 @@ Pre-deploy: validates CommonJS, pushes all local files. Stores deployment URL fo
   },
 };
 
+
+/**
+ * Returns the index (0-based) of the slot to write on the next deploy.
+ * Priority:
+ *   1. Lowest-numbered undeployed slot: if fewer than 4 slots exist, returns slotDescriptions.length
+ *      (fills slots in order: index 0 first = "slot 1", then 1, 2, 3 = "slot 4")
+ *   2. All 4 slots deployed: returns index with the oldest ISO description timestamp
+ *
+ * Note: concurrent deploys for the same scriptId will collide on slot selection — callers must serialize
+ * Note: partial-failure retries may orphan a GAS deployment slot — safe to ignore, overwritten on next full buffer rotation
+ */
+function findNextSlotIndex(slotDescriptions: string[] | undefined): number {
+  if (!slotDescriptions || slotDescriptions.length < 4) {
+    return slotDescriptions?.length ?? 0;
+  }
+  let minIdx = 0;
+  for (let i = 1; i < slotDescriptions.length; i++) {
+    if (slotDescriptions[i] < slotDescriptions[minIdx]) minIdx = i;
+  }
+  return minIdx;
+}
+
+/**
+ * Returns the index of the previous slot (one step earlier in deployment order),
+ * or null if the active slot is already the oldest.
+ * ISO string lexicographic comparison is correct for UTC timestamps.
+ * Rollback is strictly linear — does not wrap around (hard stop at oldest deployed slot).
+ */
+function findPrevSlotIndex(
+  slotDescriptions: string[],
+  activeIndex: number
+): number | null {
+  const sorted = slotDescriptions
+    .map((desc, i) => ({ i, desc }))
+    .sort((a, b) => a.desc.localeCompare(b.desc));
+  const pos = sorted.findIndex(s => s.i === activeIndex);
+  if (pos <= 0) return null; // already at oldest
+  return sorted[pos - 1].i;
+}
 
 /**
  * Push shim code + updated manifest to a consumer project, create a version,
@@ -210,7 +238,7 @@ export async function handleDeployTool(
   fileOps: GASFileOperations,
   deployOps: GASDeployOperations
 ): Promise<DeployToolResult> {
-  const { scriptId, localDir, action = 'deploy', to, from, description, versionNumber } = params;
+  const { scriptId, localDir, action = 'deploy', to, description } = params;
 
   if (!SCRIPT_ID_PATTERN.test(scriptId)) {
     return {
@@ -262,200 +290,265 @@ export async function handleDeployTool(
     }
   }
 
-  // --- action: rollback ---
+  // --- action: rollback (slot-based — walks one step back in circular buffer) ---
   if (action === 'rollback') {
-    if (!to) {
+    if (!to || (to !== 'staging' && to !== 'prod')) {
       return {
         success: false, action,
-        error: 'to (staging|prod) is required for rollback',
+        error: `Invalid environment: ${to ?? '(not specified)'} — rollback requires to="staging" or to="prod"`,
         hints: { fix: 'Specify to="staging" or to="prod"' },
-      };
-    }
-
-    if (versionNumber == null) {
-      return {
-        success: false, action,
-        environment: to,
-        error: 'versionNumber is required for rollback',
-        hints: { fix: 'Specify versionNumber — use action=list-versions to see available versions' },
       };
     }
 
     try {
       const deployInfo = await getDeploymentInfo(resolvedDir, scriptId);
-      const deploymentIdKey = to === 'staging' ? 'stagingDeploymentId' : 'prodDeploymentId';
-      const existingDeploymentId = deployInfo[deploymentIdKey];
 
-      if (!existingDeploymentId) {
+      // Read slot data using typed branching — required under strict TypeScript
+      const isStagingEnv = to === 'staging';
+      const slotDescriptions = (isStagingEnv ? deployInfo.stagingSlotDescriptions : deployInfo.prodSlotDescriptions) ?? [];
+      const slotVersions = (isStagingEnv ? deployInfo.stagingSlotVersions : deployInfo.prodSlotVersions) ?? [];
+      const slotConsumerVersions = (isStagingEnv ? deployInfo.stagingSlotConsumerVersions : deployInfo.prodSlotConsumerVersions) ?? [];
+      const activeIndex = (isStagingEnv ? deployInfo.stagingActiveSlotIndex : deployInfo.prodActiveSlotIndex) ?? 0;
+      const pointerDeploymentId = isStagingEnv ? deployInfo.stagingDeploymentId : deployInfo.prodDeploymentId;
+
+      if (slotDescriptions.length === 0) {
         return {
-          success: false, action,
-          environment: to,
-          error: `No ${to} deployment found. Run deploy with action=deploy and to="${to}" first.`,
-          hints: { fix: `Run deploy with action=deploy and to="${to}" to create a deployment` },
+          success: false, action, environment: to,
+          error: 'No rollback slots available — run deploy first to establish the slot buffer',
+          hints: { fix: 'Run action=deploy to create the first deployment slot' },
         };
       }
 
-      // Rollback: patch the deployment to point to versionNumber.
-      // This is instant — no file push, no version budget consumed.
-      const updated = await deployOps.updateDeployment(scriptId, existingDeploymentId, versionNumber);
-
-      // Update gas-deploy.json to record the active version for this env.
-      const updateInfo: Partial<DeploymentInfo> = {};
-      if (to === 'staging') {
-        updateInfo.stagingVersionNumber = versionNumber;
-        if (updated.webAppUrl) updateInfo.stagingUrl = updated.webAppUrl;
-      } else {
-        updateInfo.prodVersionNumber = versionNumber;
-        if (updated.webAppUrl) updateInfo.prodUrl = updated.webAppUrl;
+      const prevIndex = findPrevSlotIndex(slotDescriptions, activeIndex);
+      if (prevIndex === null) {
+        return {
+          success: false, action, environment: to,
+          error: 'Already at oldest available version — no earlier slot in the buffer',
+          hints: { next: 'No earlier slot available. Deploy a new version to extend rollback history.' },
+        };
       }
-      await setDeploymentInfo(resolvedDir, scriptId, updateInfo);
 
-      return {
+      const effectiveVersion = slotVersions[prevIndex];
+      if (effectiveVersion == null) {
+        return {
+          success: false, action, environment: to,
+          error: 'Rollback slot data incomplete — run deploy to rebuild the buffer',
+          hints: { fix: 'Run action=deploy to rebuild slot data' },
+        };
+      }
+
+      if (!pointerDeploymentId) {
+        return {
+          success: false, action, environment: to,
+          error: `No ${to} pointer deployment found — run deploy first`,
+          hints: { fix: 'Run action=deploy to create the pointer deployment' },
+        };
+      }
+
+      // Roll back source pointer — no description update on pointer
+      await deployOps.updateDeployment(scriptId, pointerDeploymentId, effectiveVersion);
+
+      const response: DeployToolResult = {
         success: true,
         action: 'rollback',
         environment: to,
-        versionNumber,
-        deploymentId: existingDeploymentId,
-        webAppUrl: updated.webAppUrl,
+        versionNumber: effectiveVersion,
+        deploymentId: pointerDeploymentId,
         hints: {
-          next: `Rolled back ${to} to v${versionNumber}. HEAD deployment is unchanged — exec still runs the latest local code.`,
+          next: `Rolled back ${to} to v${effectiveVersion}. HEAD deployment is unchanged — exec still runs the latest local code.`,
         },
       };
+
+      // Roll back consumer — push FRESH shim pinned to effectiveVersion (non-fatal)
+      // Always push current shim template with source version pinned — do NOT revert old shim code.
+      try {
+        const consumerScriptId = isStagingEnv ? deployInfo.stagingConsumerScriptId : deployInfo.prodConsumerScriptId;
+        const consumerDeploymentId = isStagingEnv ? deployInfo.stagingConsumerDeploymentId : deployInfo.prodConsumerDeploymentId;
+        const userSymbol = deployInfo.userSymbol;
+        if (consumerScriptId && consumerDeploymentId && userSymbol) {
+          validateUserSymbol(userSymbol);
+          const consumerResult = await updateConsumerShim(
+            scriptId, consumerScriptId, consumerDeploymentId,
+            `rollback to v${effectiveVersion}`, fileOps, deployOps, userSymbol, effectiveVersion
+          );
+          response.consumerUpdate = {
+            scriptId: consumerScriptId,
+            versionNumber: consumerResult.versionNumber,
+            deploymentUpdated: consumerResult.deploymentUpdated,
+          };
+        }
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        const consumerScriptId = isStagingEnv ? deployInfo.stagingConsumerScriptId : deployInfo.prodConsumerScriptId;
+        response.consumerUpdate = { scriptId: consumerScriptId ?? '', error: `non-fatal: ${msg}` };
+      }
+
+      // Update gas-deploy.json — slot arrays NOT modified; only active index + version number change
+      // Invariant: gas-deploy.json written only after source pointer update succeeds; consumer failure is non-fatal
+      const updateInfo: Partial<DeploymentInfo> = {};
+      if (isStagingEnv) {
+        updateInfo.stagingActiveSlotIndex = prevIndex;
+        updateInfo.stagingVersionNumber = effectiveVersion;
+      } else {
+        updateInfo.prodActiveSlotIndex = prevIndex;
+        updateInfo.prodVersionNumber = effectiveVersion;
+      }
+      // Suppress consumer version in slotConsumerVersions — not updated during rollback
+      void slotConsumerVersions; // referenced to satisfy lint; rollback does not modify slot arrays
+      await setDeploymentInfo(resolvedDir, scriptId, updateInfo);
+
+      return response;
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
       return {
         success: false, action,
         environment: to,
         error: `Rollback failed: ${message}`,
-        hints: { fix: 'Check that the versionNumber exists. Use action=list-versions to see available versions.' },
+        hints: { fix: 'Check authentication and project permissions.' },
       };
     }
   }
 
-  // promote: re-point target deployment to source's existing versionNumber — no new version consumed
+  // promote: always staging → prod — no from/to params; always staging→prod by design
   if (action === 'promote') {
-    if (!from) {
-      return {
-        success: false, action,
-        error: 'from (staging|prod) is required for promote',
-        hints: { fix: 'Specify from="staging" or from="prod"' },
-      };
-    }
-    if (!to) {
-      return {
-        success: false, action,
-        error: 'to (staging|prod) is required for promote',
-        hints: { fix: 'Specify to="staging" or to="prod"' },
-      };
-    }
-    if (from === to) {
-      return {
-        success: false, action,
-        error: 'from and to must differ',
-        hints: { fix: 'Specify different environments for from and to' },
-      };
-    }
-
     try {
       const deployInfo = await getDeploymentInfo(resolvedDir, scriptId);
 
-      const sourceDeploymentIdKey = from === 'staging' ? 'stagingDeploymentId' : 'prodDeploymentId';
-      const sourceDeploymentId = deployInfo[sourceDeploymentIdKey];
-      if (!sourceDeploymentId) {
+      const stagingDeploymentId = deployInfo.stagingDeploymentId;
+      if (!stagingDeploymentId) {
         return {
           success: false, action,
-          error: `No ${from} deployment found. Run deploy with action=deploy and to="${from}" first.`,
-          hints: { fix: `Deploy to ${from} first before promoting from it` },
+          error: 'No staging deployment found — run deploy first to create a staging deployment',
+          hints: { fix: 'Run action=deploy to create the staging deployment' },
         };
       }
 
-      const targetDeploymentIdKey = to === 'staging' ? 'stagingDeploymentId' : 'prodDeploymentId';
-      const targetDeploymentId = deployInfo[targetDeploymentIdKey];
-      if (!targetDeploymentId) {
+      const prodDeploymentId = deployInfo.prodDeploymentId;
+      if (!prodDeploymentId) {
         return {
           success: false, action,
-          error: `No ${to} deployment found. Run deploy with action=deploy and to="${to}" first.`,
-          hints: { fix: `Deploy to ${to} first before promoting into it` },
+          error: 'No prod deployment found — create an initial prod deployment first',
+          hints: { fix: 'Create a prod deployment ID in gas-deploy.json or run an initial prod deploy' },
         };
       }
 
-      // Read source versionNumber — throws if HEAD-only
-      const sourceVersionNumber = await deployOps.getDeploymentVersionNumber(scriptId, sourceDeploymentId);
+      // Read source versionNumber from staging — throws if HEAD-only
+      const sourceVersionNumber = await deployOps.getDeploymentVersionNumber(scriptId, stagingDeploymentId);
 
-      // Capture previous target versionNumber for rollback recovery in response
-      const prevVersionNumberKey = to === 'staging' ? 'stagingVersionNumber' : 'prodVersionNumber';
-      const previousVersionNumber = deployInfo[prevVersionNumberKey];
+      // Capture previous prod versionNumber for rollback hint
+      const previousVersionNumber = deployInfo.prodVersionNumber;
 
-      // Capture source env's timestamp BEFORE write for staleness hint
-      const prevSourceTs = from === 'staging' ? deployInfo.stagingDeployedAt : deployInfo.prodDeployedAt;
+      // Capture staging timestamp BEFORE write for staleness hint
+      const prevStagingTs = deployInfo.stagingDeployedAt;
 
-      // Re-point target deployment to source's versionNumber
-      const updated = await deployOps.updateDeployment(scriptId, targetDeploymentId, sourceVersionNumber);
+      // Re-point prod deployment to staging's versionNumber
+      const updated = await deployOps.updateDeployment(scriptId, prodDeploymentId, sourceVersionNumber);
 
-      // Write gas-deploy.json: target env versionNumber + timestamp
-      const tsField = to === 'staging' ? 'stagingDeployedAt' : 'prodDeployedAt';
-      const versionNumberField = to === 'staging' ? 'stagingVersionNumber' : 'prodVersionNumber';
+      const ISO_NOW = updated.updateTime ?? new Date().toISOString();
+
+      // Write gas-deploy.json after prod pointer update succeeds
       const updateInfo: Partial<DeploymentInfo> = {
-        [versionNumberField]: sourceVersionNumber,
-        [tsField]: updated.updateTime ?? new Date().toISOString(),
+        prodVersionNumber: sourceVersionNumber,
+        prodDeployedAt: ISO_NOW,
       };
-      if (updated.webAppUrl) {
-        const urlField = to === 'staging' ? 'stagingUrl' : 'prodUrl';
-        updateInfo[urlField] = updated.webAppUrl;
-      }
-      // GAS side is done — write local config. If this fails, the promote still succeeded.
-      const hints: Record<string, string> = {
-        next: `Promoted v${sourceVersionNumber} from ${from} → ${to}. URL: ${updated.webAppUrl ?? targetDeploymentId}.`,
-        rollback: previousVersionNumber != null
-          ? `To undo: action=rollback to="${to}" versionNumber=${previousVersionNumber}`
-          : `No previous version recorded for ${to}.`,
-      };
-      try {
-        await setDeploymentInfo(resolvedDir, scriptId, updateInfo);
-      } catch (configErr: unknown) {
-        const msg = configErr instanceof Error ? configErr.message : String(configErr);
-        hints.warning = `GAS promote succeeded but gas-deploy.json update failed: ${msg}`;
-      }
+      if (updated.webAppUrl) updateInfo.prodUrl = updated.webAppUrl;
 
-      // Staleness hint: if we just promoted to prod, check whether staging is now stale
-      if (to === 'prod' && prevSourceTs) {
-        const now = Date.now();
-        const stagingAge = now - new Date(prevSourceTs).getTime();
-        if (stagingAge > STALE_THRESHOLD_MS) {
-          const h = Math.round(stagingAge / (60 * 60 * 1000));
-          hints.stale = `staging is ${h}h old — consider re-deploying staging with fresh changes`;
-        }
-      }
-
-      return {
+      const response: DeployToolResult = {
         success: true,
         action: 'promote',
         versionNumber: sourceVersionNumber,
         previousVersionNumber,
-        sourceEnv: from,
-        targetEnv: to,
-        deploymentId: targetDeploymentId,
+        sourceEnv: 'staging',
+        targetEnv: 'prod',
+        deploymentId: prodDeploymentId,
         webAppUrl: updated.webAppUrl,
-        hints,
+        hints: {},
       };
+
+      // Step 1 — Write to prod source slot (Track B)
+      const ISO_SLOT_NOW = new Date().toISOString();
+      const prodSlotIndex = findNextSlotIndex(deployInfo.prodSlotDescriptions);
+      const prodSlotIds = [...(deployInfo.prodSlotIds ?? [])];
+
+      if (prodSlotIndex >= prodSlotIds.length) {
+        const newSlot = await deployOps.createDeployment(scriptId, sourceVersionNumber, ISO_SLOT_NOW);
+        prodSlotIds.push(newSlot.deploymentId);
+      } else {
+        await deployOps.updateDeployment(scriptId, prodSlotIds[prodSlotIndex], sourceVersionNumber, ISO_SLOT_NOW);
+      }
+
+      updateInfo.prodSlotIds = prodSlotIds;
+      const updatedProdSlotVersions = [...(deployInfo.prodSlotVersions ?? [])];
+      updatedProdSlotVersions[prodSlotIndex] = sourceVersionNumber;
+      updateInfo.prodSlotVersions = updatedProdSlotVersions;
+      const updatedProdSlotDescriptions = [...(deployInfo.prodSlotDescriptions ?? [])];
+      updatedProdSlotDescriptions[prodSlotIndex] = ISO_SLOT_NOW;
+      updateInfo.prodSlotDescriptions = updatedProdSlotDescriptions;
+      updateInfo.prodActiveSlotIndex = prodSlotIndex;
+
+      // Step 2 — Consumer update (Track A, non-fatal)
+      const prodConsumerScriptId = deployInfo.prodConsumerScriptId;
+      const prodConsumerDeploymentId = deployInfo.prodConsumerDeploymentId;
+      const userSymbol = deployInfo.userSymbol;
+
+      if (prodConsumerScriptId && userSymbol) {
+        try {
+          validateUserSymbol(userSymbol);
+          const consumerResult = await updateConsumerShim(
+            scriptId, prodConsumerScriptId, prodConsumerDeploymentId,
+            'prod consumer promote', fileOps, deployOps, userSymbol, sourceVersionNumber
+          );
+          const updatedProdSlotConsumerVersions = [...(deployInfo.prodSlotConsumerVersions ?? [])];
+          updatedProdSlotConsumerVersions[prodSlotIndex] = consumerResult.versionNumber ?? null;
+          updateInfo.prodSlotConsumerVersions = updatedProdSlotConsumerVersions;
+          response.consumerUpdate = {
+            scriptId: prodConsumerScriptId,
+            versionNumber: consumerResult.versionNumber,
+            deploymentUpdated: consumerResult.deploymentUpdated,
+          };
+        } catch (e: unknown) {
+          const msg = e instanceof Error ? e.message : String(e);
+          response.consumerUpdate = { scriptId: prodConsumerScriptId, error: `non-fatal: ${msg}` };
+        }
+      } else if (prodConsumerScriptId && !userSymbol) {
+        response.hints.consumerSkipped = 'Consumer shim skipped — userSymbol is not set in gas-deploy.json';
+      }
+
+      // GAS side is done — write local config. If this fails, the promote still succeeded.
+      response.hints.next = `Promoted v${sourceVersionNumber} from staging → prod. URL: ${updated.webAppUrl ?? prodDeploymentId}.`;
+      response.hints.rollback = previousVersionNumber != null
+        ? `To undo: action=rollback to="prod"`
+        : `No previous version recorded for prod.`;
+
+      try {
+        await setDeploymentInfo(resolvedDir, scriptId, updateInfo);
+      } catch (configErr: unknown) {
+        const msg = configErr instanceof Error ? configErr.message : String(configErr);
+        response.hints.warning = `GAS promote succeeded but gas-deploy.json update failed: ${msg}`;
+      }
+
+      // Staleness hint: check whether staging is now stale
+      if (prevStagingTs) {
+        const nowMs = Date.now();
+        const stagingAge = nowMs - new Date(prevStagingTs).getTime();
+        if (stagingAge > STALE_THRESHOLD_MS) {
+          const h = Math.round(stagingAge / (60 * 60 * 1000));
+          response.hints.stale = `staging is ${h}h old — consider re-deploying staging with fresh changes`;
+        }
+      }
+
+      return response;
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
       return {
         success: false, action,
         error: `Promote failed: ${message}`,
-        hints: { fix: 'Check authentication and that both environments have deployments in gas-deploy.json' },
+        hints: { fix: 'Check authentication and that staging has a deployment in gas-deploy.json' },
       };
     }
   }
 
-  // --- action: deploy (default) ---
-  if (!to) {
-    return {
-      success: false, action,
-      error: 'to (staging|prod) is required for deploy',
-      hints: { fix: 'Specify to="staging" or to="prod"' },
-    };
-  }
+  // --- action: deploy (default, always targets staging) ---
 
   // Inject default webapp config if not present — must happen before sync so it gets pushed with the version.
   try {
@@ -470,7 +563,7 @@ export async function handleDeployTool(
 
     if (!pushResult.success) {
       return {
-        success: false, action, environment: to,
+        success: false, action, environment: 'staging',
         error: `Pre-deploy push failed: ${pushResult.error}`,
         hints: { fix: 'Fix validation errors or check authentication, then retry deploy' },
       };
@@ -481,122 +574,127 @@ export async function handleDeployTool(
     console.error(`Pre-deploy push skipped: ${message}`);
   }
 
-  // Deploy lifecycle (post-push): create version snapshot → find/update or create
-  // web app deployment → pin to version → cache URL in gas-deploy.json.
+  // Deploy lifecycle (post-push): create version snapshot → write circular buffer slot → update pointer
+  // Invariant: gas-deploy.json written only after source pointer update succeeds; consumer failure is non-fatal
   try {
     // Create version snapshot
-    const versionDesc = description ?? `${to} deploy by mcp-gas-deploy`;
+    const versionDesc = description ?? 'staging deploy by mcp-gas-deploy';
     const version = await deployOps.createVersion(scriptId, versionDesc);
+    const N = version.versionNumber;
 
-    // Find or create the deployment for this environment
+    // Set ISO_NOW once — reused for slot description + stagingDeployedAt
+    const ISO_NOW = new Date().toISOString();
+
     const deployInfo = await getDeploymentInfo(resolvedDir, scriptId);
-    const deploymentIdKey = to === 'staging' ? 'stagingDeploymentId' : 'prodDeploymentId';
-    const existingDeploymentId = deployInfo[deploymentIdKey];
 
+    // Capture prod timestamp BEFORE write for staleness hint
+    const prevProdDeployedAt = deployInfo.prodDeployedAt;
+
+    // --- Find + write source slot ---
+    const slotIndex = findNextSlotIndex(deployInfo.stagingSlotDescriptions);
+    const slotIds = [...(deployInfo.stagingSlotIds ?? [])];
+
+    if (slotIndex >= slotIds.length) {
+      // New slot — create a new deployment for this slot
+      const newSlot = await deployOps.createDeployment(scriptId, N, ISO_NOW);
+      slotIds.push(newSlot.deploymentId);
+    } else {
+      // Existing slot — update it
+      await deployOps.updateDeployment(scriptId, slotIds[slotIndex], N, ISO_NOW);
+    }
+
+    const updatedSlotVersions = [...(deployInfo.stagingSlotVersions ?? [])];
+    updatedSlotVersions[slotIndex] = N;
+    const updatedSlotDescriptions = [...(deployInfo.stagingSlotDescriptions ?? [])];
+    updatedSlotDescriptions[slotIndex] = ISO_NOW;
+
+    // --- Update pointer ("version 5") — always points to latest deployed version; no description ---
     let deploymentId: string;
     let webAppUrl: string | undefined;
-    let deployUpdateTime: string | undefined;
 
-    if (existingDeploymentId) {
-      // Update existing deployment to new version
-      const updated = await deployOps.updateDeployment(scriptId, existingDeploymentId, version.versionNumber);
+    const existingStagingDeploymentId = deployInfo.stagingDeploymentId;
+    if (existingStagingDeploymentId) {
+      const updated = await deployOps.updateDeployment(scriptId, existingStagingDeploymentId, N);
       deploymentId = updated.deploymentId;
       webAppUrl = updated.webAppUrl;
-      deployUpdateTime = updated.updateTime;
     } else {
-      // Find a web app deployment to reuse, or create a new one
+      // No pointer yet — find a web app deployment to reuse, or create a new one
       const deployments = await deployOps.listDeployments(scriptId);
       const webAppDeployment = deployments.find(d =>
         d.entryPoints?.some(ep => ep.entryPointType === 'WEB_APP')
       );
 
       if (webAppDeployment) {
-        // Reuse existing web app deployment
-        const updated = await deployOps.updateDeployment(scriptId, webAppDeployment.deploymentId, version.versionNumber);
+        const updated = await deployOps.updateDeployment(scriptId, webAppDeployment.deploymentId, N);
         deploymentId = updated.deploymentId;
         webAppUrl = updated.webAppUrl;
-        deployUpdateTime = updated.updateTime;
       } else {
-        // Create new deployment
-        const created = await deployOps.createDeployment(scriptId, version.versionNumber, `${to} deployment`);
+        const created = await deployOps.createDeployment(scriptId, N, 'staging-pointer');
         deploymentId = created.deploymentId;
         webAppUrl = created.webAppUrl;
-        deployUpdateTime = created.updateTime;
       }
     }
 
-    // Capture opposite env's timestamp BEFORE setDeploymentInfo mutates info (for staleness hint)
-    const prevProdDeployedAt = to === 'staging' ? deployInfo.prodDeployedAt : undefined;
-
-    // Store deployment info — use GAS API's authoritative updateTime; fall back to client clock
-    const tsField = to === 'staging' ? 'stagingDeployedAt' : 'prodDeployedAt';
+    // Build updateInfo — gas-deploy.json written AFTER pointer update succeeds
     const updateInfo: Partial<DeploymentInfo> = {
-      lastDeploy: new Date().toISOString(),
-      [tsField]: deployUpdateTime ?? new Date().toISOString(),
+      lastDeploy: ISO_NOW,
+      stagingDeploymentId: deploymentId,
+      stagingVersionNumber: N,
+      stagingDeployedAt: ISO_NOW,
+      stagingSlotIds: slotIds,
+      stagingSlotVersions: updatedSlotVersions,
+      stagingSlotDescriptions: updatedSlotDescriptions,
+      stagingActiveSlotIndex: slotIndex,
     };
-
-    if (to === 'staging') {
-      updateInfo.stagingDeploymentId = deploymentId;
-      updateInfo.stagingVersionNumber = version.versionNumber;
-      if (webAppUrl) updateInfo.stagingUrl = webAppUrl;
-    } else {
-      updateInfo.prodDeploymentId = deploymentId;
-      updateInfo.prodVersionNumber = version.versionNumber;
-      if (webAppUrl) updateInfo.prodUrl = webAppUrl;
-    }
-
-    await setDeploymentInfo(resolvedDir, scriptId, updateInfo);
+    if (webAppUrl) updateInfo.stagingUrl = webAppUrl;
 
     // Staleness hint: prod stale vs staging
     const hints: Record<string, string> = {
       next: webAppUrl
-        ? `Deployed to ${to} (v${version.versionNumber}). URL: ${webAppUrl}. Run \`exec\` to verify.`
-        : `Version ${version.versionNumber} deployed to ${to}. Deployment ID: ${deploymentId}.`,
+        ? `Deployed to staging (v${N}). URL: ${webAppUrl}. Run \`exec\` to verify.`
+        : `Version ${N} deployed to staging. Deployment ID: ${deploymentId}.`,
     };
 
-    const now = Date.now();
-    if (to === 'staging') {
-      const stagingTs = updateInfo[tsField] as string;
-      if (prevProdDeployedAt) {
-        const prodAge = now - new Date(prevProdDeployedAt).getTime();
-        const stagingAge = now - new Date(stagingTs).getTime();
-        if (!isNaN(prodAge) && !isNaN(stagingAge)
-            && stagingAge < prodAge && prodAge > STALE_THRESHOLD_MS) {
-          const h = Math.round(prodAge / (60 * 60 * 1000));
-          hints.stale = `prod is ${h}h behind staging (v${version.versionNumber}) — consider: action=promote from=staging to=prod`;
-        }
+    const nowMs = Date.now();
+    if (prevProdDeployedAt) {
+      const prodAge = nowMs - new Date(prevProdDeployedAt).getTime();
+      const stagingAge = nowMs - new Date(ISO_NOW).getTime();
+      if (!isNaN(prodAge) && !isNaN(stagingAge)
+          && stagingAge < prodAge && prodAge > STALE_THRESHOLD_MS) {
+        const h = Math.round(prodAge / (60 * 60 * 1000));
+        hints.stale = `prod is ${h}h behind staging (v${N}) — consider: action=promote`;
       }
     }
-    // No stale hint when deploying to prod — prod just caught up
 
     const response: DeployToolResult = {
       success: true,
       action: 'deploy',
-      environment: to,
-      versionNumber: version.versionNumber,
+      environment: 'staging',
+      versionNumber: N,
       deploymentId,
       webAppUrl,
       hints,
     };
 
-    // Consumer shim update — non-fatal: consumer failure must not fail the source deploy
-    const consumerScriptId = deployInfo[to === 'staging' ? 'stagingConsumerScriptId' : 'prodConsumerScriptId'];
+    // --- Consumer update — non-fatal: consumer failure must not fail the source deploy ---
+    const consumerScriptId = deployInfo.stagingConsumerScriptId;
     const userSymbol = deployInfo.userSymbol;
+    const updatedSlotConsumerVersions = [...(deployInfo.stagingSlotConsumerVersions ?? [])];
 
     if (consumerScriptId && !userSymbol) {
-      hints.consumerSkipped = `Consumer shim skipped — userSymbol is not set in gas-deploy.json`;
+      hints.consumerSkipped = 'Consumer shim skipped — userSymbol is not set in gas-deploy.json';
     } else if (userSymbol && !consumerScriptId) {
-      hints.consumerSkipped = `Consumer shim skipped — ${to}ConsumerScriptId is not set in gas-deploy.json`;
+      hints.consumerSkipped = 'Consumer shim skipped — stagingConsumerScriptId is not set in gas-deploy.json';
     } else if (consumerScriptId && userSymbol) {
       try {
         validateUserSymbol(userSymbol);
-        const consumerDeploymentId = deployInfo[to === 'staging' ? 'stagingConsumerDeploymentId' : 'prodConsumerDeploymentId'];
+        const consumerDeploymentId = deployInfo.stagingConsumerDeploymentId;
         const consumerResult = await updateConsumerShim(
           scriptId, consumerScriptId, consumerDeploymentId,
-          description ?? `Deploy to ${to}`,
-          fileOps, deployOps, userSymbol,
-          version.versionNumber
+          description ?? 'Deploy to staging',
+          fileOps, deployOps, userSymbol, N
         );
+        updatedSlotConsumerVersions[slotIndex] = consumerResult.versionNumber;
         response.consumerUpdate = {
           scriptId: consumerScriptId,
           versionNumber: consumerResult.versionNumber,
@@ -605,15 +703,23 @@ export async function handleDeployTool(
       } catch (consumerError: unknown) {
         // non-fatal: consumer failure must not fail the source deploy
         const msg = consumerError instanceof Error ? consumerError.message : String(consumerError);
+        updatedSlotConsumerVersions[slotIndex] = null;
         response.consumerUpdate = { scriptId: consumerScriptId, error: `non-fatal: ${msg}` };
       }
+    } else {
+      updatedSlotConsumerVersions[slotIndex] = null;
     }
+
+    updateInfo.stagingSlotConsumerVersions = updatedSlotConsumerVersions;
+
+    // Write gas-deploy.json — only reached after pointer update succeeds
+    await setDeploymentInfo(resolvedDir, scriptId, updateInfo);
 
     return response;
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
     return {
-      success: false, action, environment: to,
+      success: false, action, environment: 'staging',
       error: `Deploy failed: ${message}`,
       hints: { fix: 'Check authentication and project permissions. If deploy failed after version creation, re-run deploy to re-pin.' },
     };
