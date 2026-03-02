@@ -206,6 +206,79 @@ describe('deployTool rollback action (slot-based)', () => {
     assert.deepEqual(info?.prodSlotVersions, infoWithProd.prodSlotVersions);
   });
 
+  it('single-slot buffer at activeIndex=0 returns "oldest" error', async () => {
+    const singleSlotInfo: DeploymentInfo = {
+      stagingDeploymentId: 'AKfycbPointer',
+      stagingVersionNumber: 1,
+      stagingSlotIds: ['AKfycbSlot0'],
+      stagingSlotVersions: [1],
+      stagingSlotDescriptions: ['2024-01-01T00:00:00.000Z'],
+      stagingSlotConsumerVersions: [null],
+      stagingActiveSlotIndex: 0,
+    };
+    await writeDeployConfig(tmpDir, { [VALID_SCRIPT_ID]: singleSlotInfo });
+
+    const result = await handleDeployTool(
+      { scriptId: VALID_SCRIPT_ID, localDir: tmpDir, action: 'rollback', to: 'staging' },
+      makeFileOps(),
+      makeDeployOps()
+    );
+
+    assert.equal(result.success, false);
+    assert.ok(result.error?.toLowerCase().includes('oldest'), `error should mention oldest, got: ${result.error}`);
+  });
+
+  it('3-slot buffer: rollback twice stops at oldest, slot arrays unchanged', async () => {
+    const threeSlotInfo: DeploymentInfo = {
+      stagingDeploymentId: 'AKfycbPointer',
+      stagingVersionNumber: 3,
+      stagingSlotIds: ['slot0', 'slot1', 'slot2'],
+      stagingSlotVersions: [1, 2, 3],
+      stagingSlotDescriptions: ['2024-01-01T00:00:00.000Z', '2024-01-02T00:00:00.000Z', '2024-01-03T00:00:00.000Z'],
+      stagingSlotConsumerVersions: [null, null, null],
+      stagingActiveSlotIndex: 2,
+    };
+    await writeDeployConfig(tmpDir, { [VALID_SCRIPT_ID]: threeSlotInfo });
+
+    // First rollback: 2 → 1
+    const deployOps1 = makeDeployOps();
+    const r1 = await handleDeployTool(
+      { scriptId: VALID_SCRIPT_ID, localDir: tmpDir, action: 'rollback', to: 'staging' },
+      makeFileOps(),
+      deployOps1
+    );
+    assert.equal(r1.success, true, `first rollback should succeed, got: ${r1.error}`);
+    assert.equal(r1.versionNumber, 2, 'first rollback → v2 (slot 1)');
+
+    // Second rollback: 1 → 0
+    const deployOps2 = makeDeployOps();
+    const r2 = await handleDeployTool(
+      { scriptId: VALID_SCRIPT_ID, localDir: tmpDir, action: 'rollback', to: 'staging' },
+      makeFileOps(),
+      deployOps2
+    );
+    assert.equal(r2.success, true, `second rollback should succeed, got: ${r2.error}`);
+    assert.equal(r2.versionNumber, 1, 'second rollback → v1 (slot 0)');
+
+    // Third rollback: at oldest → error
+    const deployOps3 = makeDeployOps();
+    const r3 = await handleDeployTool(
+      { scriptId: VALID_SCRIPT_ID, localDir: tmpDir, action: 'rollback', to: 'staging' },
+      makeFileOps(),
+      deployOps3
+    );
+    assert.equal(r3.success, false, 'third rollback should fail — at oldest');
+    assert.ok(r3.error?.toLowerCase().includes('oldest'), `error should mention oldest, got: ${r3.error}`);
+
+    // Verify slot arrays are unchanged after all rollbacks
+    const config = await readDeployConfig(tmpDir);
+    const info = config[VALID_SCRIPT_ID];
+    assert.deepEqual(info?.stagingSlotIds, threeSlotInfo.stagingSlotIds, 'slot IDs unchanged');
+    assert.deepEqual(info?.stagingSlotVersions, threeSlotInfo.stagingSlotVersions, 'slot versions unchanged');
+    assert.deepEqual(info?.stagingSlotDescriptions, threeSlotInfo.stagingSlotDescriptions, 'slot descriptions unchanged');
+    assert.equal(info?.stagingActiveSlotIndex, 0, 'active slot at oldest');
+  });
+
   it('returns error when `to` is missing', async () => {
     await writeDeployConfig(tmpDir, { [VALID_SCRIPT_ID]: twoSlotInfo });
 
