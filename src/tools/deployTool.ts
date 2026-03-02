@@ -464,7 +464,8 @@ export async function handleDeployTool(
       };
 
       // Step 1 — Write to prod source slot (Track B)
-      const ISO_SLOT_NOW = new Date().toISOString();
+      const stagingSlotDesc = deployInfo.stagingSlotDescriptions?.[deployInfo.stagingActiveSlotIndex ?? 0];
+      const ISO_SLOT_NOW = stagingSlotDesc ?? new Date().toISOString();
       const prodSlotIndex = findNextSlotIndex(deployInfo.prodSlotDescriptions);
       const prodSlotIds = [...(deployInfo.prodSlotIds ?? [])];
 
