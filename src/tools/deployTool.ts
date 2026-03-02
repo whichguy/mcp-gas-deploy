@@ -307,7 +307,6 @@ export async function handleDeployTool(
       const isStagingEnv = to === 'staging';
       const slotDescriptions = (isStagingEnv ? deployInfo.stagingSlotDescriptions : deployInfo.prodSlotDescriptions) ?? [];
       const slotVersions = (isStagingEnv ? deployInfo.stagingSlotVersions : deployInfo.prodSlotVersions) ?? [];
-      const slotConsumerVersions = (isStagingEnv ? deployInfo.stagingSlotConsumerVersions : deployInfo.prodSlotConsumerVersions) ?? [];
       const activeIndex = (isStagingEnv ? deployInfo.stagingActiveSlotIndex : deployInfo.prodActiveSlotIndex) ?? 0;
       const pointerDeploymentId = isStagingEnv ? deployInfo.stagingDeploymentId : deployInfo.prodDeploymentId;
 
@@ -393,8 +392,7 @@ export async function handleDeployTool(
         updateInfo.prodActiveSlotIndex = prevIndex;
         updateInfo.prodVersionNumber = effectiveVersion;
       }
-      // slotConsumerVersions is read-only here — rollback does not modify consumer slot arrays.
-      // (declared above for symmetry; consumer update path handles it non-fatally)
+      // Rollback does not modify consumer slot arrays — consumer update is handled non-fatally above.
       await setDeploymentInfo(resolvedDir, scriptId, updateInfo);
 
       return response;
