@@ -268,10 +268,12 @@ export async function handleExecTool(
 
     // Follow up to 5 redirects, forwarding the Bearer token only to *.google.com targets
     let redirectHops = 0;
+    let currentUrl = execGetUrl;
     while ((response.status === 301 || response.status === 302 || response.status === 303 || response.status === 307 || response.status === 308) && redirectHops < 5) {
       const location = response.headers.get('location');
       if (!location) break;
-      const redirectUrl = new URL(location, execGetUrl);
+      const redirectUrl = new URL(location, currentUrl);
+      currentUrl = redirectUrl.toString();
       if (!redirectUrl.hostname.endsWith('.google.com') && redirectUrl.hostname !== 'google.com') {
         // Non-Google redirect — stop following; let the final response be handled below
         break;

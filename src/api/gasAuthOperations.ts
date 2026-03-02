@@ -104,6 +104,8 @@ export class GASAuthOperations {
    * On 401, attempts one token refresh then retries.
    */
   async makeAuthenticatedRequest<T>(apiCall: (scriptApi: ReturnType<typeof google.script>) => Promise<T>): Promise<T> {
+    // Capture old token before the call so we can evict its cache entry on 401
+    const oldToken = await this.sessionManager.getValidToken();
     let scriptApi = await this.getScriptApi();
 
     try {
@@ -114,10 +116,9 @@ export class GASAuthOperations {
         (error as { status?: number })?.status;
 
       if (status === 401) {
-        // Evict stale cache entry and retry once with a fresh token
-        const token = await this.sessionManager.getValidToken();
-        if (token) {
-          const cacheKey = createHash('sha256').update(token).digest('hex');
+        // Evict stale cache entry (keyed on OLD token) and retry once with a fresh token
+        if (oldToken) {
+          const cacheKey = createHash('sha256').update(oldToken).digest('hex');
           this.clientCache.delete(cacheKey);
         }
 
