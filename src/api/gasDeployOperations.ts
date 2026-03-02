@@ -93,11 +93,14 @@ export class GASDeployOperations {
 
   /**
    * Update an existing deployment to point to a different version.
+   * Pass description only for slot writes (stores ISO deploy timestamp in GAS).
+   * Pointer writes omit description — the pointer description is never updated.
    */
   async updateDeployment(
     scriptId: string,
     deploymentId: string,
-    versionNumber: number
+    versionNumber: number,
+    description?: string          // ← new; passed only for slot writes, omitted for pointer writes
   ): Promise<GASDeployment> {
     return this.authOps.makeAuthenticatedRequest(async (scriptApi) => {
       console.error(`updateDeployment: pinning ${deploymentId} to v${versionNumber}`);
@@ -109,6 +112,7 @@ export class GASDeployOperations {
           deploymentConfig: {
             manifestFileName: 'appsscript',
             versionNumber,
+            ...(description !== undefined && { description }),
           },
         },
       });
