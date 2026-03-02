@@ -29,6 +29,21 @@ export interface DeploymentInfo {
   stagingConsumerDeploymentId?: string; // Optional: staging consumer web-app deployment ID
   prodConsumerScriptId?: string;        // Prod consumer project scriptId
   prodConsumerDeploymentId?: string;    // Optional: prod consumer web-app deployment ID
+
+  // Circular buffer slots (auto-managed — never set manually)
+  // Staging slots: up to 4 source deployment slot IDs (0-indexed, fills in order: 0→1→2→3→cycle)
+  stagingSlotIds?: string[];                        // source deployment slot IDs (slots 1–4, 0-indexed)
+  stagingSlotVersions?: number[];                   // source GAS version served by each slot
+  stagingSlotDescriptions?: string[];               // ISO timestamps — when each slot was last written
+  stagingSlotConsumerVersions?: (number | null)[];  // consumer version deployed alongside each source slot (null if no consumer)
+  stagingActiveSlotIndex?: number;                  // index of slot the pointer currently serves (0–3)
+
+  // Prod slots (same shape as staging — written on promote)
+  prodSlotIds?: string[];
+  prodSlotVersions?: number[];
+  prodSlotDescriptions?: string[];
+  prodSlotConsumerVersions?: (number | null)[];
+  prodActiveSlotIndex?: number;
 }
 
 export interface DeployConfig {

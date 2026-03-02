@@ -113,6 +113,56 @@ describe('deployConfig', () => {
       const result = await readDeployConfig(tmpDir);
       assert.deepEqual(result, config);
     });
+
+    it('round-trips: 10 circular buffer slot fields survive write/read', async () => {
+      const now = Date.now();
+      const ts1 = new Date(now - 3 * 60 * 60 * 1000).toISOString(); // 3h ago
+      const ts2 = new Date(now - 2 * 60 * 60 * 1000).toISOString(); // 2h ago
+      const ts3 = new Date(now - 1 * 60 * 60 * 1000).toISOString(); // 1h ago
+
+      const config = {
+        scriptId123: {
+          stagingDeploymentId: 'AKfycbPointer',
+          stagingVersionNumber: 3,
+          stagingSlotIds: ['AKfycbSlot0', 'AKfycbSlot1', 'AKfycbSlot2'],
+          stagingSlotVersions: [1, 2, 3],
+          stagingSlotDescriptions: [ts1, ts2, ts3],
+          stagingSlotConsumerVersions: [1, 2, null],
+          stagingActiveSlotIndex: 2,
+          prodSlotIds: ['AKfycbProdSlot0'],
+          prodSlotVersions: [3],
+          prodSlotDescriptions: [ts3],
+          prodSlotConsumerVersions: [null],
+          prodActiveSlotIndex: 0,
+        },
+      };
+      await writeDeployConfig(tmpDir, config);
+      const result = await readDeployConfig(tmpDir);
+      assert.deepEqual(result, config);
+    });
+
+    it('round-trips: slot fields with all 4 slots filled (full buffer)', async () => {
+      const now = Date.now();
+      const ts = [
+        new Date(now - 4 * 60 * 60 * 1000).toISOString(),
+        new Date(now - 3 * 60 * 60 * 1000).toISOString(),
+        new Date(now - 2 * 60 * 60 * 1000).toISOString(),
+        new Date(now - 1 * 60 * 60 * 1000).toISOString(),
+      ];
+
+      const config = {
+        scriptId123: {
+          stagingSlotIds: ['slot0', 'slot1', 'slot2', 'slot3'],
+          stagingSlotVersions: [1, 2, 3, 4],
+          stagingSlotDescriptions: ts,
+          stagingSlotConsumerVersions: [1, 2, 3, 4],
+          stagingActiveSlotIndex: 3,
+        },
+      };
+      await writeDeployConfig(tmpDir, config);
+      const result = await readDeployConfig(tmpDir);
+      assert.deepEqual(result, config);
+    });
   });
 
   // --- getDeploymentInfo ---
