@@ -251,16 +251,42 @@ export async function handleExecTool(
     const separator = normalizedUrl.includes('?') ? '&' : '?';
     const execGetUrl = `${normalizedUrl}${separator}_mcp_run=true&func=${encodeURIComponent(jsStatement)}`;
 
+    // Follow redirects manually so the Bearer token is only forwarded to *.google.com hops.
+    // GAS web apps use an IAP redirect chain (script.google.com → accounts.google.com) before
+    // serving the response; redirect:'follow' would send the token to any redirect target.
+    // We stop at the first non-google.com redirect to prevent token leakage.
     const signal = AbortSignal.timeout(30_000);
-    const response = await fetch(execGetUrl, {
+    let response = await fetch(execGetUrl, {
       method: 'GET',
       headers: {
         'Authorization': `Bearer ${token}`,
         'Accept': 'application/json',
       },
-      redirect: 'follow',
+      redirect: 'manual',
       signal,
     });
+
+    // Follow up to 5 redirects, forwarding the Bearer token only to *.google.com targets
+    let redirectHops = 0;
+    while ((response.status === 301 || response.status === 302 || response.status === 303 || response.status === 307 || response.status === 308) && redirectHops < 5) {
+      const location = response.headers.get('location');
+      if (!location) break;
+      const redirectUrl = new URL(location, execGetUrl);
+      if (!redirectUrl.hostname.endsWith('.google.com') && redirectUrl.hostname !== 'google.com') {
+        // Non-Google redirect — stop following; let the final response be handled below
+        break;
+      }
+      redirectHops++;
+      response = await fetch(redirectUrl.toString(), {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Accept': 'application/json',
+        },
+        redirect: 'manual',
+        signal,
+      });
+    }
 
     if (!response.ok) {
       const text = await response.text();
