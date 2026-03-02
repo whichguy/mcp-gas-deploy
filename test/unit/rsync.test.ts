@@ -269,6 +269,43 @@ describe('push', () => {
     sinon.assert.notCalled(fileOps.updateProjectFiles as sinon.SinonStub);
   });
 
+  it('sets mergeSkipped=true when remote fetch fails in merge mode', async () => {
+    const validGs = `function _main() { exports.fn = function() {}; }\n__defineModule__(_main, false);`;
+    await fs.writeFile(path.join(tmpDir, 'local.gs'), validGs, 'utf-8');
+
+    const fileOps = {
+      getProjectFiles: sinon.stub().rejects(new Error('network error')),
+      updateProjectFiles: sinon.stub().resolves([]),
+    } as unknown as GASFileOperations;
+
+    const result = await push('scriptId', tmpDir, fileOps, { skipValidation: true });
+
+    assert.ok(result.success, 'push should still succeed');
+    assert.equal(result.mergeSkipped, true, 'mergeSkipped should be true when remote fetch fails');
+  });
+
+  it('mergeSkipped is falsy when merge succeeds', async () => {
+    const validGs = `function _main() { exports.fn = function() {}; }\n__defineModule__(_main, false);`;
+    await fs.writeFile(path.join(tmpDir, 'local.gs'), validGs, 'utf-8');
+
+    const fileOps = makeFileOps([gasFile('remote', '// remote')]);
+    const result = await push('scriptId', tmpDir, fileOps, { skipValidation: true });
+
+    assert.ok(result.success);
+    assert.ok(!result.mergeSkipped, 'mergeSkipped should be falsy when merge succeeds');
+  });
+
+  it('mergeSkipped is falsy when prune=true (no merge attempted)', async () => {
+    const validGs = `function _main() { exports.fn = function() {}; }\n__defineModule__(_main, false);`;
+    await fs.writeFile(path.join(tmpDir, 'local.gs'), validGs, 'utf-8');
+
+    const fileOps = makeFileOps([gasFile('remote', '// remote')]);
+    const result = await push('scriptId', tmpDir, fileOps, { skipValidation: true, prune: true });
+
+    assert.ok(result.success);
+    assert.ok(!result.mergeSkipped, 'mergeSkipped should be falsy when prune=true (no merge)');
+  });
+
   it('sorts require.gs to position 0', async () => {
     const validGs = `function _main() { exports.fn = function() {}; }\n__defineModule__(_main, false);`;
     await fs.writeFile(path.join(tmpDir, 'zzz.gs'), validGs, 'utf-8');

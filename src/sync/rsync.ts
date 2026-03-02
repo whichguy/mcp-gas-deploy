@@ -32,6 +32,7 @@ export interface PushResult {
   filesPushed: string[];
   validationErrors?: ValidationResult[];
   error?: string;
+  mergeSkipped?: boolean;
 }
 
 export interface PullResult {
@@ -297,6 +298,7 @@ export async function push(
       // MERGE behavior (prune=false, default): fetch remote and preserve remote-only files.
       // This prevents accidental deletion of files that exist on GAS but not locally.
       // Pass prune=true to explicitly remove remote-only files from GAS.
+      let mergeSkipped = false;
       if (!options.prune) {
         try {
           const remoteFiles = await fileOps.getProjectFiles(scriptId);
@@ -309,6 +311,7 @@ export async function push(
           }
         } catch {
           // Non-fatal — if remote fetch fails, proceed with local-only push
+          mergeSkipped = true;
           console.error('[push] Could not fetch remote files for merge; proceeding with local-only push');
         }
       }
@@ -323,7 +326,7 @@ export async function push(
       });
 
       if (options.dryRun) {
-        return { success: true, filesPushed: allLocalNames };
+        return { success: true, filesPushed: allLocalNames, mergeSkipped };
       }
 
       // Validate all .gs files before pushing
@@ -341,7 +344,7 @@ export async function push(
 
       await fileOps.updateProjectFiles(scriptId, fileSet);
 
-      return { success: true, filesPushed: allLocalNames };
+      return { success: true, filesPushed: allLocalNames, mergeSkipped };
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
       return { success: false, filesPushed: [], error: message };

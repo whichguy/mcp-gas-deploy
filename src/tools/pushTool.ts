@@ -148,13 +148,17 @@ export async function handlePushTool(
   }
 
   const verb = dryRun ? 'would be pushed' : 'pushed';
+  const hints: Record<string, string> = {
+    next: dryRun
+      ? `${result.filesPushed.length} files ${verb}. Run without dryRun to push.`
+      : `${result.filesPushed.length} files ${verb}. Run \`exec\` to verify or \`deploy\` to create a stable version.${prune ? ' Remote-only files were pruned.' : ''}`,
+  };
+  if (result.mergeSkipped) {
+    hints.warning = 'Remote files could not be fetched for merge — remote-only files may have been removed';
+  }
   return {
     success: true,
     filesPushed: result.filesPushed,
-    hints: {
-      next: dryRun
-        ? `${result.filesPushed.length} files ${verb}. Run without dryRun to push.`
-        : `${result.filesPushed.length} files ${verb}. Run \`exec\` to verify or \`deploy\` to create a stable version.${prune ? ' Remote-only files were pruned.' : ''}`,
-    },
+    hints,
   };
 }

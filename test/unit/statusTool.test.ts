@@ -158,6 +158,7 @@ describe('handleStatusTool', () => {
       assert.equal(result.success, true);
       assert.ok(result.hints.staleprod, `expected staleprod hint, hints: ${JSON.stringify(result.hints)}`);
       assert.ok(result.hints.staleprod.includes('promote'), `hint should mention promote: ${result.hints.staleprod}`);
+      assert.ok(result.hints.staleprod.endsWith('action=promote'), `staleprod hint should end with action=promote (no from=/to= params): ${result.hints.staleprod}`);
     });
 
     it('emits staledev hint when local changes present and staging is >48h old', async () => {
@@ -180,6 +181,7 @@ describe('handleStatusTool', () => {
       assert.equal(result.success, true);
       assert.ok(result.hints.staledev, `expected staledev hint, hints: ${JSON.stringify(result.hints)}`);
       assert.ok(result.hints.staledev.includes('staging'), `hint should mention staging: ${result.hints.staledev}`);
+      assert.ok(result.hints.staledev.endsWith('action=deploy'), `staledev hint should end with action=deploy (no to= param): ${result.hints.staledev}`);
     });
 
     it('omits staleness hints when timestamps are missing', async () => {

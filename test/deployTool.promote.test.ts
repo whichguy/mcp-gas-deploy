@@ -248,6 +248,54 @@ describe('deployTool promote action', () => {
     );
   });
 
+  it('prod slot description preserves staging deploy timestamp (not promote time)', async () => {
+    const stagingSlotTs = '2026-01-15T10:30:00.000Z';
+    const infoWithSlots: DeploymentInfo = {
+      ...baseInfo,
+      stagingSlotIds: ['stagingSlot0'],
+      stagingSlotVersions: [5],
+      stagingSlotDescriptions: [stagingSlotTs],
+      stagingActiveSlotIndex: 0,
+    };
+    await writeDeployConfig(tmpDir, { [VALID_SCRIPT_ID]: infoWithSlots });
+
+    const deployOps = makeDeployOps();
+    await handleDeployTool(
+      { scriptId: VALID_SCRIPT_ID, localDir: tmpDir, action: 'promote' },
+      makeFileOps(),
+      deployOps
+    );
+
+    const config = await readDeployConfig(tmpDir);
+    const info = config[VALID_SCRIPT_ID];
+
+    assert.equal(
+      info?.prodSlotDescriptions?.[0],
+      stagingSlotTs,
+      'prodSlotDescriptions[0] should match staging slot deploy timestamp'
+    );
+  });
+
+  it('prod slot description falls back to current time when staging slot descriptions are missing', async () => {
+    // baseInfo has no staging slot descriptions
+    const deployOps = makeDeployOps();
+    const beforeTs = Date.now();
+    await handleDeployTool(
+      { scriptId: VALID_SCRIPT_ID, localDir: tmpDir, action: 'promote' },
+      makeFileOps(),
+      deployOps
+    );
+    const afterTs = Date.now();
+
+    const config = await readDeployConfig(tmpDir);
+    const info = config[VALID_SCRIPT_ID];
+
+    assert.ok(info?.prodSlotDescriptions?.[0], 'prodSlotDescriptions[0] should be set');
+    const slotTs = new Date(info!.prodSlotDescriptions![0]).getTime();
+    assert.ok(slotTs >= beforeTs - 5000, 'fallback timestamp should be recent (not before call)');
+    assert.ok(slotTs <= afterTs + 5000, 'fallback timestamp should be recent (not far in future)');
+  });
+
   it('consumer update succeeds when prodConsumerScriptId and userSymbol are set', async () => {
     const infoWithConsumer: DeploymentInfo = {
       ...baseInfo,
