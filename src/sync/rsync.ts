@@ -50,7 +50,7 @@ async function withPushLock<T>(scriptId: string, fn: () => Promise<T>): Promise<
     await pushLocks.get(scriptId);
   }
 
-  let resolve: () => void;
+  let resolve: () => void = () => { /* replaced by Promise constructor */ };
   const lockPromise = new Promise<void>(r => { resolve = r; });
   pushLocks.set(scriptId, lockPromise);
 
@@ -58,7 +58,7 @@ async function withPushLock<T>(scriptId: string, fn: () => Promise<T>): Promise<
     return await fn();
   } finally {
     pushLocks.delete(scriptId);
-    resolve!();
+    resolve();
   }
 }
 

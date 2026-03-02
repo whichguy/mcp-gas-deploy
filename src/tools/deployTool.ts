@@ -393,8 +393,8 @@ export async function handleDeployTool(
         updateInfo.prodActiveSlotIndex = prevIndex;
         updateInfo.prodVersionNumber = effectiveVersion;
       }
-      // Suppress consumer version in slotConsumerVersions — not updated during rollback
-      void slotConsumerVersions; // referenced to satisfy lint; rollback does not modify slot arrays
+      // slotConsumerVersions is read-only here — rollback does not modify consumer slot arrays.
+      // (declared above for symmetry; consumer update path handles it non-fatally)
       await setDeploymentInfo(resolvedDir, scriptId, updateInfo);
 
       return response;
