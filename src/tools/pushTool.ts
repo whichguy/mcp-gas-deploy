@@ -156,6 +156,9 @@ export async function handlePushTool(
   if (result.mergeSkipped) {
     hints.warning = 'Remote files could not be fetched for merge — remote-only files may have been removed';
   }
+  if (result.gitArchived && result.archivedFiles?.length) {
+    hints.gitArchive = `${result.archivedFiles.length} remote-only file(s) archived in git. Use \`git log --diff-filter=A -- <filename>\` to find archived files.`;
+  }
   return {
     success: true,
     filesPushed: result.filesPushed,

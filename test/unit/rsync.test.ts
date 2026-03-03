@@ -320,6 +320,134 @@ describe('push', () => {
   });
 });
 
+// --- push git archive ---
+
+describe('push git archive', () => {
+  let tmpDir: string;
+  const validGs = `function _main() { exports.fn = function() {}; }\n__defineModule__(_main, false);`;
+
+  async function initGit(dir: string): Promise<void> {
+    const { execFile } = await import('node:child_process');
+    const { promisify } = await import('node:util');
+    const execFileAsync = promisify(execFile);
+    await execFileAsync('git', ['init', '-b', 'main'], { cwd: dir });
+    await execFileAsync('git', ['config', 'user.email', 'test@test.com'], { cwd: dir });
+    await execFileAsync('git', ['config', 'user.name', 'Test'], { cwd: dir });
+  }
+
+  async function initGitCommit(dir: string): Promise<void> {
+    const { execFile } = await import('node:child_process');
+    const { promisify } = await import('node:util');
+    const execFileAsync = promisify(execFile);
+    await execFileAsync('git', ['add', '-A'], { cwd: dir });
+    await execFileAsync('git', ['commit', '-m', 'initial'], { cwd: dir });
+  }
+
+  async function gitLog(dir: string): Promise<string> {
+    const { execFile } = await import('node:child_process');
+    const { promisify } = await import('node:util');
+    const execFileAsync = promisify(execFile);
+    const { stdout } = await execFileAsync('git', ['log', '--oneline'], { cwd: dir });
+    return stdout.trim();
+  }
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'rsync-archive-test-'));
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('archives remote-only files in git with two commits', async () => {
+    await initGit(tmpDir);
+    await fs.writeFile(path.join(tmpDir, 'local.gs'), validGs, 'utf-8');
+    await initGitCommit(tmpDir);
+
+    const fileOps = makeFileOps([gasFile('local', validGs), gasFile('ghost', '// remote only')]);
+    const result = await push('scriptId', tmpDir, fileOps, { skipValidation: true });
+
+    assert.ok(result.success);
+    assert.equal(result.gitArchived, true);
+    assert.deepEqual(result.archivedFiles, ['ghost']);
+
+    const log = await gitLog(tmpDir);
+    assert.ok(log.includes('gas-archive:'), `Expected archive commits in log: ${log}`);
+    assert.ok(log.includes('removed archived files'), `Expected removal commit in log: ${log}`);
+
+    // Working tree should be restored — ghost.gs should not exist
+    await assert.rejects(() => fs.access(path.join(tmpDir, 'ghost.gs')), 'ghost.gs should not exist after archive');
+  });
+
+  it('does not archive when no remote-only files', async () => {
+    await initGit(tmpDir);
+    await fs.writeFile(path.join(tmpDir, 'shared.gs'), validGs, 'utf-8');
+    await initGitCommit(tmpDir);
+
+    const fileOps = makeFileOps([gasFile('shared', validGs)]);
+    const result = await push('scriptId', tmpDir, fileOps, { skipValidation: true });
+
+    assert.ok(result.success);
+    assert.ok(!result.gitArchived, 'gitArchived should be falsy when no remote-only files');
+  });
+
+  it('skips archive when no .git directory', async () => {
+    // No git init — tmpDir has no .git
+    await fs.writeFile(path.join(tmpDir, 'local.gs'), validGs, 'utf-8');
+
+    const fileOps = makeFileOps([gasFile('local', validGs), gasFile('ghost', '// remote only')]);
+    const result = await push('scriptId', tmpDir, fileOps, { skipValidation: true });
+
+    assert.ok(result.success, 'push should still succeed without git');
+    assert.ok(!result.gitArchived, 'gitArchived should be false without .git');
+  });
+
+  it('archives in prune mode too', async () => {
+    await initGit(tmpDir);
+    await fs.writeFile(path.join(tmpDir, 'local.gs'), validGs, 'utf-8');
+    await initGitCommit(tmpDir);
+
+    const fileOps = makeFileOps([gasFile('local', validGs), gasFile('ghost', '// pruned')]);
+    const result = await push('scriptId', tmpDir, fileOps, { skipValidation: true, prune: true });
+
+    assert.ok(result.success);
+    assert.equal(result.gitArchived, true, 'should archive even in prune mode');
+    assert.deepEqual(result.archivedFiles, ['ghost']);
+
+    // Verify ghost is NOT in the push payload (prune removes it)
+    const pushedFiles = (fileOps.updateProjectFiles as sinon.SinonStub).firstCall.args[1] as GASFile[];
+    assert.ok(!pushedFiles.find(f => f.name === 'ghost'), 'ghost should not be in push payload with prune=true');
+  });
+
+  it('push succeeds even if git archive fails', async () => {
+    // Create .git dir but corrupt it so git commands fail
+    await fs.mkdir(path.join(tmpDir, '.git'), { recursive: true });
+    await fs.writeFile(path.join(tmpDir, 'local.gs'), validGs, 'utf-8');
+
+    const fileOps = makeFileOps([gasFile('local', validGs), gasFile('ghost', '// remote only')]);
+    const result = await push('scriptId', tmpDir, fileOps, { skipValidation: true });
+
+    assert.ok(result.success, 'push should succeed even when git archive fails');
+    assert.ok(!result.gitArchived, 'gitArchived should be false on git failure');
+  });
+
+  it('dryRun skips git archive', async () => {
+    await initGit(tmpDir);
+    await fs.writeFile(path.join(tmpDir, 'local.gs'), validGs, 'utf-8');
+    await initGitCommit(tmpDir);
+
+    const fileOps = makeFileOps([gasFile('local', validGs), gasFile('ghost', '// remote only')]);
+    const result = await push('scriptId', tmpDir, fileOps, { skipValidation: true, dryRun: true });
+
+    assert.ok(result.success);
+    assert.ok(!result.gitArchived, 'dryRun should skip git archive');
+
+    // Only the initial commit should exist
+    const log = await gitLog(tmpDir);
+    assert.ok(!log.includes('gas-archive:'), 'No archive commits should exist on dryRun');
+  });
+});
+
 // --- pull ---
 
 describe('pull', () => {
