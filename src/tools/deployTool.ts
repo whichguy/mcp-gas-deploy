@@ -24,6 +24,7 @@ import {
 } from '../config/deployConfig.js';
 import { SCRIPT_ID_PATTERN } from '../utils/validation.js';
 import { generateShimCode, validateUserSymbol, buildConsumerManifest } from '../utils/consumerShim.js';
+import { buildHintContext } from '../utils/hintContext.js';
 
 /** Default web app manifest config — applied when deploying a project with no webapp section. */
 const DEFAULT_WEBAPP_CONFIG = {
@@ -285,7 +286,7 @@ export async function handleDeployTool(
         success: false,
         action: 'list-versions',
         error: `Failed to list versions: ${message}`,
-        hints: { fix: 'Check authentication and project permissions' },
+        hints: { fix: `Failed to list versions for scriptId=${scriptId}. Check authentication and project permissions.` },
       };
     }
   }
@@ -300,8 +301,9 @@ export async function handleDeployTool(
       };
     }
 
+    let deployInfo: DeploymentInfo | undefined;
     try {
-      const deployInfo = await getDeploymentInfo(resolvedDir, scriptId);
+      deployInfo = await getDeploymentInfo(resolvedDir, scriptId);
 
       // Read slot data using typed branching — required under strict TypeScript
       const isStagingEnv = to === 'staging';
@@ -314,7 +316,10 @@ export async function handleDeployTool(
         return {
           success: false, action, environment: to,
           error: 'No rollback slots available — run deploy first to establish the slot buffer',
-          hints: { fix: 'Run action=deploy to create the first deployment slot' },
+          hints: {
+            fix: `Run action=deploy to create the first ${to} deployment slot`,
+            context: buildHintContext(deployInfo, to),
+          },
         };
       }
 
@@ -323,7 +328,7 @@ export async function handleDeployTool(
         return {
           success: false, action, environment: to,
           error: 'Already at oldest available version — no earlier slot in the buffer',
-          hints: { next: 'No earlier slot available. Deploy a new version to extend rollback history.' },
+          hints: { next: `Already at oldest slot (activeIndex=${activeIndex}, ${slotDescriptions.length} total slots). Deploy a new version to extend rollback history.` },
         };
       }
 
@@ -332,7 +337,10 @@ export async function handleDeployTool(
         return {
           success: false, action, environment: to,
           error: 'Rollback slot data incomplete — run deploy to rebuild the buffer',
-          hints: { fix: 'Run action=deploy to rebuild slot data' },
+          hints: {
+            fix: `Slot ${prevIndex} has no version number. Run action=deploy to rebuild the buffer.`,
+            context: buildHintContext(deployInfo, to),
+          },
         };
       }
 
@@ -340,7 +348,7 @@ export async function handleDeployTool(
         return {
           success: false, action, environment: to,
           error: `No ${to} pointer deployment found — run deploy first`,
-          hints: { fix: 'Run action=deploy to create the pointer deployment' },
+          hints: { fix: `gas-deploy.json has no ${to}DeploymentId. Run action=deploy to create the pointer deployment.` },
         };
       }
 
@@ -402,22 +410,29 @@ export async function handleDeployTool(
         success: false, action,
         environment: to,
         error: `Rollback failed: ${message}`,
-        hints: { fix: 'Check authentication and project permissions.' },
+        hints: {
+          fix: 'Check authentication and project permissions.',
+          context: buildHintContext(deployInfo, to),
+        },
       };
     }
   }
 
   // promote: always staging → prod — no from/to params; always staging→prod by design
   if (action === 'promote') {
+    let deployInfo: DeploymentInfo | undefined;
     try {
-      const deployInfo = await getDeploymentInfo(resolvedDir, scriptId);
+      deployInfo = await getDeploymentInfo(resolvedDir, scriptId);
 
       const stagingDeploymentId = deployInfo.stagingDeploymentId;
       if (!stagingDeploymentId) {
         return {
           success: false, action,
           error: 'No staging deployment found — run deploy first to create a staging deployment',
-          hints: { fix: 'Run action=deploy to create the staging deployment' },
+          hints: {
+            fix: 'gas-deploy.json has no stagingDeploymentId — run action=deploy to create a staging deployment.',
+            context: buildHintContext(deployInfo, 'staging'),
+          },
         };
       }
 
@@ -426,7 +441,10 @@ export async function handleDeployTool(
         return {
           success: false, action,
           error: 'No prod deployment found — create an initial prod deployment first',
-          hints: { fix: 'Create a prod deployment ID in gas-deploy.json or run an initial prod deploy' },
+          hints: {
+            fix: 'gas-deploy.json has no prodDeploymentId — set it manually or create an initial prod deployment.',
+            context: buildHintContext(deployInfo, 'prod'),
+          },
         };
       }
 
@@ -546,7 +564,10 @@ export async function handleDeployTool(
       return {
         success: false, action,
         error: `Promote failed: ${message}`,
-        hints: { fix: 'Check authentication and that staging has a deployment in gas-deploy.json' },
+        hints: {
+          fix: `Check authentication. Staging v${deployInfo?.stagingVersionNumber ?? '?'} → prod deployment ${deployInfo?.prodDeploymentId ?? '?'}.`,
+          context: buildHintContext(deployInfo),
+        },
       };
     }
   }
@@ -568,7 +589,11 @@ export async function handleDeployTool(
       return {
         success: false, action, environment: 'staging',
         error: `Pre-deploy push failed: ${pushResult.error}`,
-        hints: { fix: 'Fix validation errors or check authentication, then retry deploy' },
+        hints: {
+          fix: pushResult.error?.includes('Validation')
+            ? 'Fix CommonJS validation errors above, then retry action=deploy'
+            : 'Check authentication and network, then retry action=deploy',
+        },
       };
     }
   } catch (error: unknown) {
@@ -579,6 +604,7 @@ export async function handleDeployTool(
 
   // Deploy lifecycle (post-push): create version snapshot → write circular buffer slot → update pointer
   // Invariant: gas-deploy.json written only after source pointer update succeeds; consumer failure is non-fatal
+  let deployInfo: DeploymentInfo | undefined;
   try {
     // Create version snapshot
     const versionDesc = description ?? 'staging deploy by mcp-gas-deploy';
@@ -588,7 +614,7 @@ export async function handleDeployTool(
     // Set ISO_NOW once — reused for slot description + stagingDeployedAt
     const ISO_NOW = new Date().toISOString();
 
-    const deployInfo = await getDeploymentInfo(resolvedDir, scriptId);
+    deployInfo = await getDeploymentInfo(resolvedDir, scriptId);
 
     // Capture prod timestamp BEFORE write for staleness hint
     const prevProdDeployedAt = deployInfo.prodDeployedAt;
@@ -724,7 +750,10 @@ export async function handleDeployTool(
     return {
       success: false, action, environment: 'staging',
       error: `Deploy failed: ${message}`,
-      hints: { fix: 'Check authentication and project permissions. If deploy failed after version creation, re-run deploy to re-pin.' },
+      hints: {
+        fix: 'Check authentication and project permissions. If deploy failed after version creation, re-run action=deploy to re-pin.',
+        context: buildHintContext(deployInfo, 'staging'),
+      },
     };
   }
 }

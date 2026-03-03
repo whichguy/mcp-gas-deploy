@@ -133,7 +133,7 @@ export async function handlePushTool(
       success: false,
       filesPushed: [],
       error: result.error,
-      hints: { fix: 'Check that the scriptId is valid and you are authenticated' },
+      hints: { fix: `Push failed for scriptId=${scriptId}: ${result.error}. Check authentication and that the project exists.` },
     };
   }
 
