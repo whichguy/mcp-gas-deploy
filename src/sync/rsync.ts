@@ -333,9 +333,9 @@ export async function pull(
       await fs.access(path.join(localDir, '.git'));
     } catch {
       try {
-        await execFileAsync('git', ['init', '-b', 'main'], { cwd: localDir });
-        await execFileAsync('git', ['add', '-A'], { cwd: localDir });
-        await execFileAsync('git', ['commit', '-m', 'Initial pull from GAS'], { cwd: localDir });
+        await execFileAsync('git', ['init', '-b', 'main'], { cwd: localDir, timeout: 10000 });
+        await execFileAsync('git', ['add', '-A'], { cwd: localDir, timeout: 10000 });
+        await execFileAsync('git', ['commit', '-m', 'Initial pull from GAS'], { cwd: localDir, timeout: 10000 });
       } catch {
         /* git not available or init failed — non-fatal, files are already written */
       }
