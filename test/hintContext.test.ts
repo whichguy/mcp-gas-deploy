@@ -56,10 +56,19 @@ describe('buildHintContext', () => {
     assert.ok(result.includes(' | '), `should separate with pipe, got: ${result}`);
   });
 
-  it('shows "none" for missing fields', () => {
+  it('shows "none" for missing staging fields', () => {
     const info: DeploymentInfo = {};
     const result = buildHintContext(info, 'staging');
-    assert.ok(result.includes('vnone'), `got: ${result}`);
+    assert.ok(result.includes('staging: vnone'), `got: ${result}`);
+    assert.ok(result.includes('deployId=none'), `got: ${result}`);
+    assert.ok(result.includes('slots=0'), `got: ${result}`);
+    assert.ok(result.includes('activeSlot=none'), `got: ${result}`);
+  });
+
+  it('shows "none" for missing prod fields', () => {
+    const info: DeploymentInfo = {};
+    const result = buildHintContext(info, 'prod');
+    assert.ok(result.includes('prod: vnone'), `got: ${result}`);
     assert.ok(result.includes('deployId=none'), `got: ${result}`);
     assert.ok(result.includes('slots=0'), `got: ${result}`);
     assert.ok(result.includes('activeSlot=none'), `got: ${result}`);
