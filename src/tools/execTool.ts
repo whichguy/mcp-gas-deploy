@@ -14,6 +14,7 @@ import { GASFileOperations } from '../api/gasFileOperations.js';
 import { GASDeployOperations } from '../api/gasDeployOperations.js';
 import { push } from '../sync/rsync.js';
 import { getDeploymentInfo, setDeploymentInfo } from '../config/deployConfig.js';
+import { buildHintContext } from '../utils/hintContext.js';
 import { SessionManager } from '../auth/sessionManager.js';
 import { SCRIPT_ID_PATTERN, FUNCTION_PATTERN, MODULE_NAME_PATTERN } from '../utils/validation.js';
 import type { ValidationResult } from '../validation/commonjsValidator.js';
@@ -161,7 +162,7 @@ export async function handleExecTool(
     return {
       success: false,
       error: 'No deployment URL found',
-      hints: { fix: 'Run `deploy` first to create a web app deployment, then retry `exec`' },
+      hints: { fix: 'No deployment URL found in gas-deploy.json (checked headUrl, stagingUrl, prodUrl). Run action=deploy to create a web app deployment, then retry exec.' },
     };
   }
 
@@ -321,7 +322,10 @@ export async function handleExecTool(
         success: false, filesSync,
         error: data.error ?? 'Unknown execution error',
         logs: data.logger_output,
-        hints: { fix: 'Check the function and module names, ensure function is exported inside _main()' },
+        hints: {
+          fix: 'Check the function and module names, ensure function is exported inside _main().',
+          invocation: jsStatement,
+        },
       };
     }
 
@@ -339,7 +343,10 @@ export async function handleExecTool(
     return {
       success: false, filesSync,
       error: `Execution failed: ${message}`,
-      hints: { fix: 'Check the deployment URL and function name' },
+      hints: {
+        fix: `Execution failed against ${headUrl ?? 'unknown URL'}. Check the deployment URL and function name.`,
+        context: buildHintContext(deployInfo),
+      },
     };
   }
 }
