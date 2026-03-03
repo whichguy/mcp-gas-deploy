@@ -344,4 +344,48 @@ describe('deployTool promote action', () => {
     assert.equal(result.success, true, 'promote should succeed even when consumer fails');
     assert.ok(result.consumerUpdate?.error?.includes('non-fatal'), `expected non-fatal error, got: ${result.consumerUpdate?.error}`);
   });
+
+  it('consumer failure nulls out prodSlotConsumerVersions[prodSlotIndex] (not stale value)', async () => {
+    const infoWithStaleConsumer: DeploymentInfo = {
+      ...baseInfo,
+      userSymbol: 'SheetsChat',
+      prodConsumerScriptId: 'consumerProdScriptId',
+      prodConsumerDeploymentId: 'AKfycbConsumerProd',
+      prodSlotConsumerVersions: [42],  // stale value from previous promote at slot 0
+    };
+    await writeDeployConfig(tmpDir, { [VALID_SCRIPT_ID]: infoWithStaleConsumer });
+
+    const deployOps = makeDeployOps({
+      createVersion: sinon.stub().rejects(new Error('consumer createVersion failed')),
+    });
+
+    const result = await handleDeployTool(
+      { scriptId: VALID_SCRIPT_ID, localDir: tmpDir, action: 'promote' },
+      makeFileOps(),
+      deployOps
+    );
+
+    assert.equal(result.success, true, 'promote should succeed even when consumer fails');
+
+    const config = await readDeployConfig(tmpDir);
+    const info = config[VALID_SCRIPT_ID];
+    assert.strictEqual(info?.prodSlotConsumerVersions?.[0], null, 'prodSlotConsumerVersions[0] should be null (not stale 42)');
+  });
+
+  it('no consumer configured — prodSlotConsumerVersions[prodSlotIndex] set to null', async () => {
+    // baseInfo has no prodConsumerScriptId or userSymbol
+    const deployOps = makeDeployOps();
+    const result = await handleDeployTool(
+      { scriptId: VALID_SCRIPT_ID, localDir: tmpDir, action: 'promote' },
+      makeFileOps(),
+      deployOps
+    );
+
+    assert.equal(result.success, true, `expected success, got error: ${result.error}`);
+    assert.equal(result.consumerUpdate, undefined, 'consumerUpdate should be absent when no consumer configured');
+
+    const config = await readDeployConfig(tmpDir);
+    const info = config[VALID_SCRIPT_ID];
+    assert.strictEqual(info?.prodSlotConsumerVersions?.[0], null, 'prodSlotConsumerVersions[0] should be null');
+  });
 });

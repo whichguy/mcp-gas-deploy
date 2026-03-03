@@ -490,6 +490,10 @@ export async function handleDeployTool(
       const prodConsumerDeploymentId = deployInfo.prodConsumerDeploymentId;
       const userSymbol = deployInfo.userSymbol;
 
+      // Initialize consumer version for this slot — default null, overwritten on success
+      const updatedProdSlotConsumerVersions = [...(deployInfo.prodSlotConsumerVersions ?? [])];
+      updatedProdSlotConsumerVersions[prodSlotIndex] = null;
+
       if (prodConsumerScriptId && userSymbol) {
         try {
           validateUserSymbol(userSymbol);
@@ -497,9 +501,7 @@ export async function handleDeployTool(
             scriptId, prodConsumerScriptId, prodConsumerDeploymentId,
             'prod consumer promote', fileOps, deployOps, userSymbol, sourceVersionNumber
           );
-          const updatedProdSlotConsumerVersions = [...(deployInfo.prodSlotConsumerVersions ?? [])];
           updatedProdSlotConsumerVersions[prodSlotIndex] = consumerResult.versionNumber ?? null;
-          updateInfo.prodSlotConsumerVersions = updatedProdSlotConsumerVersions;
           response.consumerUpdate = {
             scriptId: prodConsumerScriptId,
             versionNumber: consumerResult.versionNumber,
@@ -512,6 +514,8 @@ export async function handleDeployTool(
       } else if (prodConsumerScriptId && !userSymbol) {
         response.hints.consumerSkipped = 'Consumer shim skipped — userSymbol is not set in gas-deploy.json';
       }
+
+      updateInfo.prodSlotConsumerVersions = updatedProdSlotConsumerVersions;
 
       // GAS side is done — write local config. If this fails, the promote still succeeded.
       response.hints.next = `Promoted v${sourceVersionNumber} from staging → prod. URL: ${updated.webAppUrl ?? prodDeploymentId}.`;
