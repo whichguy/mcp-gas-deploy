@@ -194,13 +194,21 @@ async function gitArchiveRemoteOnly(
       const filename = `${file.name}${ext}`;
       const filePath = path.join(localDir, filename);
       await fs.mkdir(path.dirname(filePath), { recursive: true });
+      // Guard: remoteOnlyFiles filter should prevent this, but never overwrite local files
+      try {
+        await fs.access(filePath);
+        // File exists — bail out of archive entirely to protect local state
+        return { archived: false, archivedFiles: [], error: `Archive skipped: ${filename} already exists locally` };
+      } catch {
+        // ENOENT — safe to write
+      }
       await fs.writeFile(filePath, file.source ?? '', 'utf-8');
       writtenPaths.push(filePath);
       archivedNames.push(file.name);
     }
 
-    // Commit the archived files
-    await execFileAsync('git', ['add', '-A'], { cwd: localDir, timeout: 10000 });
+    // Commit the archived files (only the paths we wrote — not unrelated working tree changes)
+    await execFileAsync('git', ['add', '--', ...writtenPaths], { cwd: localDir, timeout: 10000 });
     await execFileAsync(
       'git',
       ['commit', '-m', `gas-archive: ${remoteOnlyFiles.length} remote-only file(s) from GAS`],
@@ -211,7 +219,7 @@ async function gitArchiveRemoteOnly(
     for (const filePath of writtenPaths) {
       await fs.unlink(filePath);
     }
-    await execFileAsync('git', ['add', '-A'], { cwd: localDir, timeout: 10000 });
+    await execFileAsync('git', ['add', '--', ...writtenPaths], { cwd: localDir, timeout: 10000 });
     await execFileAsync(
       'git',
       ['commit', '-m', 'gas-archive: removed archived files'],
