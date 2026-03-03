@@ -33,6 +33,14 @@ export interface PushResult {
   validationErrors?: ValidationResult[];
   error?: string;
   mergeSkipped?: boolean;
+  gitArchived?: boolean;
+  archivedFiles?: string[];
+}
+
+interface GitArchiveResult {
+  archived: boolean;
+  archivedFiles: string[];
+  error?: string;
 }
 
 export interface PullResult {
@@ -135,6 +143,94 @@ async function readLocalFiles(
   }
 
   return files;
+}
+
+// --- Git archive ---
+
+/**
+ * Archive remote-only GAS files in git history before they can be lost.
+ *
+ * Two-commit pattern: writes remote-only files to disk and commits them,
+ * then deletes them and commits the removal — restoring the working tree
+ * to its original state. This creates a recoverable trail via `git show`
+ * or `git log --diff-filter=A -- <filename>`.
+ *
+ * Assumes exclusive access to localDir's git working tree (guaranteed by
+ * withPushLock when each scriptId maps to a unique localDir).
+ */
+async function gitArchiveRemoteOnly(
+  localDir: string,
+  remoteOnlyFiles: GASFile[]
+): Promise<GitArchiveResult> {
+  // Early return: no files to archive
+  if (remoteOnlyFiles.length === 0) {
+    return { archived: false, archivedFiles: [] };
+  }
+
+  // Early return: no .git directory — git not initialized
+  try {
+    await fs.access(path.join(localDir, '.git'));
+  } catch {
+    return { archived: false, archivedFiles: [] };
+  }
+
+  // Early return: git not available
+  let execFileAsync: typeof import('node:child_process').execFile.__promisify__;
+  try {
+    const { execFile } = await import('node:child_process');
+    const { promisify } = await import('node:util');
+    execFileAsync = promisify(execFile);
+    await execFileAsync('git', ['--version'], { cwd: localDir, timeout: 10000 });
+  } catch {
+    return { archived: false, archivedFiles: [] };
+  }
+
+  const writtenPaths: string[] = [];
+  const archivedNames: string[] = [];
+  try {
+    // Write each remote-only file to disk with correct extension
+    for (const file of remoteOnlyFiles) {
+      const ext = getExtension(file.type);
+      const filename = `${file.name}${ext}`;
+      const filePath = path.join(localDir, filename);
+      await fs.mkdir(path.dirname(filePath), { recursive: true });
+      await fs.writeFile(filePath, file.source ?? '', 'utf-8');
+      writtenPaths.push(filePath);
+      archivedNames.push(file.name);
+    }
+
+    // Commit the archived files
+    await execFileAsync('git', ['add', '-A'], { cwd: localDir, timeout: 10000 });
+    await execFileAsync(
+      'git',
+      ['commit', '-m', `gas-archive: ${remoteOnlyFiles.length} remote-only file(s) from GAS`],
+      { cwd: localDir, timeout: 10000 }
+    );
+
+    // Remove the archived files and commit the removal
+    for (const filePath of writtenPaths) {
+      await fs.unlink(filePath);
+    }
+    await execFileAsync('git', ['add', '-A'], { cwd: localDir, timeout: 10000 });
+    await execFileAsync(
+      'git',
+      ['commit', '-m', 'gas-archive: removed archived files'],
+      { cwd: localDir, timeout: 10000 }
+    );
+
+    return { archived: true, archivedFiles: archivedNames };
+  } catch (error: unknown) {
+    // Best-effort cleanup: remove any files we wrote to restore working tree
+    for (const filePath of writtenPaths) {
+      try { await fs.unlink(filePath); } catch { /* may already be deleted */ }
+    }
+    // Best-effort: reset any staged changes
+    try {
+      await execFileAsync('git', ['reset', 'HEAD'], { cwd: localDir, timeout: 10000 });
+    } catch { /* non-fatal */ }
+    const message = error instanceof Error ? error.message : String(error);
+    return { archived: false, archivedFiles: [], error: message };
+  }
 }
 
 // --- Core operations ---
@@ -295,24 +391,32 @@ export async function push(
         allLocalNames.push(name);
       }
 
-      // MERGE behavior (prune=false, default): fetch remote and preserve remote-only files.
-      // This prevents accidental deletion of files that exist on GAS but not locally.
-      // Pass prune=true to explicitly remove remote-only files from GAS.
+      // Fetch remote files unconditionally — needed for both merge and git archive.
       let mergeSkipped = false;
+      let remoteOnlyFiles: GASFile[] = [];
+      let gitArchived = false;
+      let archivedFiles: string[] = [];
+      try {
+        const remoteFiles = await fileOps.getProjectFiles(scriptId);
+        const localNameSet = new Set(localFiles.keys());
+        remoteOnlyFiles = remoteFiles.filter(f => !localNameSet.has(f.name));
+      } catch {
+        // Non-fatal — if remote fetch fails, proceed with local-only push
+        mergeSkipped = true;
+        console.error('[push] Could not fetch remote files for merge; proceeding with local-only push');
+      }
+
+      // Archive remote-only files in git before they can be lost (skipped on dryRun)
+      if (!options.dryRun && remoteOnlyFiles.length > 0) {
+        const archiveResult = await gitArchiveRemoteOnly(localDir, remoteOnlyFiles);
+        gitArchived = archiveResult.archived;
+        archivedFiles = archiveResult.archivedFiles;
+      }
+
+      // MERGE behavior (prune=false, default): preserve remote-only files in push payload.
       if (!options.prune) {
-        try {
-          const remoteFiles = await fileOps.getProjectFiles(scriptId);
-          const localNameSet = new Set(localFiles.keys());
-          for (const remoteFile of remoteFiles) {
-            if (!localNameSet.has(remoteFile.name)) {
-              // Remote-only file — preserve it by including in the push payload
-              fileSet.push({ name: remoteFile.name, type: remoteFile.type, source: remoteFile.source ?? '' });
-            }
-          }
-        } catch {
-          // Non-fatal — if remote fetch fails, proceed with local-only push
-          mergeSkipped = true;
-          console.error('[push] Could not fetch remote files for merge; proceeding with local-only push');
+        for (const remoteFile of remoteOnlyFiles) {
+          fileSet.push({ name: remoteFile.name, type: remoteFile.type, source: remoteFile.source ?? '' });
         }
       }
 
@@ -326,7 +430,7 @@ export async function push(
       });
 
       if (options.dryRun) {
-        return { success: true, filesPushed: allLocalNames, mergeSkipped };
+        return { success: true, filesPushed: allLocalNames, mergeSkipped, gitArchived, archivedFiles };
       }
 
       // Validate all .gs files before pushing
@@ -344,7 +448,7 @@ export async function push(
 
       await fileOps.updateProjectFiles(scriptId, fileSet);
 
-      return { success: true, filesPushed: allLocalNames, mergeSkipped };
+      return { success: true, filesPushed: allLocalNames, mergeSkipped, gitArchived, archivedFiles };
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
       return { success: false, filesPushed: [], error: message };
