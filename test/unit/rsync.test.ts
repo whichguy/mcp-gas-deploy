@@ -374,6 +374,33 @@ describe('push git archive', () => {
     await assert.rejects(() => fs.access(path.join(tmpDir, 'ghost.gs')), 'ghost.gs should not exist after archive');
   });
 
+  it('does not commit uncommitted local modifications during archive', async () => {
+    await initGit(tmpDir);
+    await fs.writeFile(path.join(tmpDir, 'local.gs'), validGs, 'utf-8');
+    await initGitCommit(tmpDir);
+
+    // Modify local.gs WITHOUT committing — simulates user's in-progress edit
+    await fs.writeFile(path.join(tmpDir, 'local.gs'), validGs + '\n// user edit', 'utf-8');
+
+    const fileOps = makeFileOps([gasFile('local', validGs), gasFile('ghost', '// remote only')]);
+    const result = await push('scriptId', tmpDir, fileOps, { skipValidation: true });
+
+    assert.ok(result.success);
+    assert.equal(result.gitArchived, true);
+
+    // The user's uncommitted edit should still be unstaged (dirty working tree)
+    const { stdout: status } = await execFileAsync('git', ['status', '--porcelain'], { cwd: tmpDir });
+    assert.ok(status.includes('local.gs'), 'local.gs should still show as modified (uncommitted)');
+
+    // Verify the local file content was not reverted
+    const content = await fs.readFile(path.join(tmpDir, 'local.gs'), 'utf-8');
+    assert.ok(content.includes('// user edit'), 'local modification should be preserved on disk');
+
+    // Verify the archive commit itself did not include local.gs
+    const { stdout: archiveDiff } = await execFileAsync('git', ['show', '--stat', 'HEAD~1'], { cwd: tmpDir });
+    assert.ok(!archiveDiff.includes('local.gs'), 'archive commit should not contain local.gs (user edit was leaked)');
+  });
+
   it('does not archive when no remote-only files', async () => {
     await initGit(tmpDir);
     await fs.writeFile(path.join(tmpDir, 'shared.gs'), validGs, 'utf-8');
