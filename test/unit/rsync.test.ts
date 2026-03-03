@@ -14,9 +14,13 @@ import sinon from 'sinon';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { getStatus, push, pull } from '../../src/sync/rsync.js';
 import type { GASFileOperations } from '../../src/api/gasFileOperations.js';
 import type { GASFile } from '../../src/api/gasTypes.js';
+
+const execFileAsync = promisify(execFile);
 
 // --- Helpers ---
 
@@ -327,26 +331,17 @@ describe('push git archive', () => {
   const validGs = `function _main() { exports.fn = function() {}; }\n__defineModule__(_main, false);`;
 
   async function initGit(dir: string): Promise<void> {
-    const { execFile } = await import('node:child_process');
-    const { promisify } = await import('node:util');
-    const execFileAsync = promisify(execFile);
     await execFileAsync('git', ['init', '-b', 'main'], { cwd: dir });
     await execFileAsync('git', ['config', 'user.email', 'test@test.com'], { cwd: dir });
     await execFileAsync('git', ['config', 'user.name', 'Test'], { cwd: dir });
   }
 
   async function initGitCommit(dir: string): Promise<void> {
-    const { execFile } = await import('node:child_process');
-    const { promisify } = await import('node:util');
-    const execFileAsync = promisify(execFile);
     await execFileAsync('git', ['add', '-A'], { cwd: dir });
     await execFileAsync('git', ['commit', '-m', 'initial'], { cwd: dir });
   }
 
   async function gitLog(dir: string): Promise<string> {
-    const { execFile } = await import('node:child_process');
-    const { promisify } = await import('node:util');
-    const execFileAsync = promisify(execFile);
     const { stdout } = await execFileAsync('git', ['log', '--oneline'], { cwd: dir });
     return stdout.trim();
   }

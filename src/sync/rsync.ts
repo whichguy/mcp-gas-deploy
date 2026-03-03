@@ -12,9 +12,13 @@
 import { promises as fs } from 'node:fs';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { GASFileOperations } from '../api/gasFileOperations.js';
 import { validateFilesErrors, type ValidationResult } from '../validation/commonjsValidator.js';
 import type { GASFile } from '../api/gasTypes.js';
+
+const execFileAsync = promisify(execFile);
 
 // --- Types ---
 
@@ -175,11 +179,7 @@ async function gitArchiveRemoteOnly(
   }
 
   // Early return: git not available
-  let execFileAsync: typeof import('node:child_process').execFile.__promisify__;
   try {
-    const { execFile } = await import('node:child_process');
-    const { promisify } = await import('node:util');
-    execFileAsync = promisify(execFile);
     await execFileAsync('git', ['--version'], { cwd: localDir, timeout: 10000 });
   } catch {
     return { archived: false, archivedFiles: [] };
@@ -333,9 +333,6 @@ export async function pull(
       await fs.access(path.join(localDir, '.git'));
     } catch {
       try {
-        const { execFile } = await import('node:child_process');
-        const { promisify } = await import('node:util');
-        const execFileAsync = promisify(execFile);
         await execFileAsync('git', ['init', '-b', 'main'], { cwd: localDir });
         await execFileAsync('git', ['add', '-A'], { cwd: localDir });
         await execFileAsync('git', ['commit', '-m', 'Initial pull from GAS'], { cwd: localDir });
