@@ -94,7 +94,7 @@ src/
 Deployments use a **4-slot circular buffer** per environment (staging and production):
 
 - **`deploy`** creates a new version, writes it to the next available slot, and points the staging deployment at that slot.
-- **`rollback`** steps back one slot (no wrap-around). Works for both `staging` and `prod`.
+- **`rollback`** steps back one slot (no wrap-around). Specify `to=staging` or `to=prod`.
 - **`promote`** copies the current staging version to a production slot.
 - **`list-versions`** shows all version snapshots with descriptions.
 
