@@ -16,7 +16,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { getStatus, push, pull } from '../../src/sync/rsync.js';
+import { getStatus, push, pull, orderFilesForPush } from '../../src/sync/rsync.js';
 import type { GASFileOperations } from '../../src/api/gasFileOperations.js';
 import type { GASFile } from '../../src/api/gasTypes.js';
 
@@ -310,7 +310,7 @@ describe('push', () => {
     assert.ok(!result.mergeSkipped, 'mergeSkipped should be falsy when prune=true (no merge)');
   });
 
-  it('sorts require.gs to position 0', async () => {
+  it('sorts require.gs to position 0 via orderFilesForPush', async () => {
     const validGs = `function _main() { exports.fn = function() {}; }\n__defineModule__(_main, false);`;
     await fs.writeFile(path.join(tmpDir, 'zzz.gs'), validGs, 'utf-8');
     await fs.writeFile(path.join(tmpDir, 'require.gs'), validGs, 'utf-8');
@@ -321,6 +321,177 @@ describe('push', () => {
 
     const pushedFiles = (fileOps.updateProjectFiles as sinon.SinonStub).firstCall.args[1] as GASFile[];
     assert.equal(pushedFiles[0].name, 'require');
+  });
+});
+
+// --- orderFilesForPush ---
+
+function gasFileWithPosition(name: string, position: number, type: GASFile['type'] = 'SERVER_JS'): GASFile {
+  return { name, source: `// ${name}`, type, position };
+}
+
+describe('orderFilesForPush', () => {
+  it('preserves remote order for existing files', () => {
+    const fileSet: GASFile[] = [
+      gasFile('beta'), gasFile('alpha'), gasFile('gamma'),
+    ];
+    const remote = [
+      gasFileWithPosition('alpha', 0),
+      gasFileWithPosition('beta', 1),
+      gasFileWithPosition('gamma', 2),
+    ];
+
+    const result = orderFilesForPush(fileSet, remote);
+
+    assert.deepEqual(result.map(f => f.name), ['alpha', 'beta', 'gamma']);
+  });
+
+  it('appends new files after existing files', () => {
+    const fileSet: GASFile[] = [
+      gasFile('existing'), gasFile('brandNew'),
+    ];
+    const remote = [gasFileWithPosition('existing', 0)];
+
+    const result = orderFilesForPush(fileSet, remote);
+
+    assert.equal(result[0].name, 'existing');
+    assert.equal(result[1].name, 'brandNew');
+  });
+
+  it('new common-js/ files sort before other new files', () => {
+    const fileSet: GASFile[] = [
+      gasFile('ui/sidebar'), gasFile('common-js/utils'),
+    ];
+    const remote: GASFile[] = [];
+
+    const result = orderFilesForPush(fileSet, remote);
+
+    const names = result.map(f => f.name);
+    assert.ok(
+      names.indexOf('common-js/utils') < names.indexOf('ui/sidebar'),
+      `common-js/utils should come before ui/sidebar, got: ${names}`
+    );
+  });
+
+  it('new files grouped by folder', () => {
+    const fileSet: GASFile[] = [
+      gasFile('b/two'), gasFile('a/one'), gasFile('b/one'), gasFile('a/two'),
+    ];
+    const remote: GASFile[] = [];
+
+    const result = orderFilesForPush(fileSet, remote);
+
+    const names = result.map(f => f.name);
+    // a/ files should be together, b/ files should be together
+    const aIndices = names.filter(n => n.startsWith('a/')).map(n => names.indexOf(n));
+    const bIndices = names.filter(n => n.startsWith('b/')).map(n => names.indexOf(n));
+    assert.ok(Math.max(...aIndices) < Math.min(...bIndices) || Math.max(...bIndices) < Math.min(...aIndices),
+      `Files should be grouped by folder, got: ${names}`);
+  });
+
+  it('appsscript manifest always last', () => {
+    const fileSet: GASFile[] = [
+      { name: 'appsscript', source: '{}', type: 'JSON' },
+      gasFile('main'),
+      gasFile('utils'),
+    ];
+    const remote: GASFile[] = [];
+
+    const result = orderFilesForPush(fileSet, remote);
+
+    assert.equal(result[result.length - 1].name, 'appsscript');
+  });
+
+  it('first push (empty remote) — common-js first, folder-grouped, appsscript last', () => {
+    const fileSet: GASFile[] = [
+      gasFile('ui/dialog'),
+      gasFile('common-js/require'),
+      { name: 'appsscript', source: '{}', type: 'JSON' },
+      gasFile('main'),
+      gasFile('common-js/utils'),
+    ];
+    const remote: GASFile[] = [];
+
+    const result = orderFilesForPush(fileSet, remote);
+
+    const names = result.map(f => f.name);
+    // require first (Tier 0)
+    assert.equal(names[0], 'common-js/require');
+    // common-js/ files next (Tier 1)
+    assert.ok(names.indexOf('common-js/utils') < names.indexOf('main'),
+      `common-js/utils should be before main, got: ${names}`);
+    // appsscript last
+    assert.equal(names[names.length - 1], 'appsscript');
+  });
+
+  it('require.gs at position 0 when it exists on remote', () => {
+    const fileSet: GASFile[] = [
+      gasFile('main'), gasFile('require'),
+    ];
+    const remote = [
+      gasFileWithPosition('require', 0),
+      gasFileWithPosition('main', 1),
+    ];
+
+    const result = orderFilesForPush(fileSet, remote);
+
+    assert.equal(result[0].name, 'require');
+  });
+
+  it('mixed known + new files across folders', () => {
+    const fileSet: GASFile[] = [
+      gasFile('newFile'),
+      gasFile('existing-a'),
+      gasFile('common-js/newModule'),
+      gasFile('existing-b'),
+    ];
+    const remote = [
+      gasFileWithPosition('existing-a', 2),
+      gasFileWithPosition('existing-b', 5),
+    ];
+
+    const result = orderFilesForPush(fileSet, remote);
+
+    const names = result.map(f => f.name);
+    // Known files first in remote order
+    assert.equal(names[0], 'existing-a');
+    assert.equal(names[1], 'existing-b');
+    // New common-js/ before other new
+    assert.ok(names.indexOf('common-js/newModule') < names.indexOf('newFile'),
+      `common-js/newModule should be before newFile, got: ${names}`);
+  });
+
+  it('empty fileSet returns empty array', () => {
+    const result = orderFilesForPush([], [gasFileWithPosition('foo', 0)]);
+    assert.deepEqual(result, []);
+  });
+
+  it('remote files without position field treated as high position', () => {
+    const fileSet: GASFile[] = [
+      gasFile('noPos'), gasFile('hasPos'),
+    ];
+    const remote: GASFile[] = [
+      { name: 'hasPos', source: '// hasPos', type: 'SERVER_JS', position: 0 },
+      { name: 'noPos', source: '// noPos', type: 'SERVER_JS' }, // no position field
+    ];
+
+    const result = orderFilesForPush(fileSet, remote);
+
+    // hasPos (position 0) should come before noPos (MAX_SAFE_INTEGER fallback)
+    assert.equal(result[0].name, 'hasPos');
+    assert.equal(result[1].name, 'noPos');
+  });
+
+  it('stable order within same folder for new files', () => {
+    const fileSet: GASFile[] = [
+      gasFile('lib/alpha'), gasFile('lib/beta'), gasFile('lib/gamma'),
+    ];
+    const remote: GASFile[] = [];
+
+    const result = orderFilesForPush(fileSet, remote);
+
+    // Should preserve insertion order within same folder
+    assert.deepEqual(result.map(f => f.name), ['lib/alpha', 'lib/beta', 'lib/gamma']);
   });
 });
 
