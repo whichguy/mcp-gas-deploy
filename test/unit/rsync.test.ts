@@ -310,7 +310,7 @@ describe('push', () => {
     assert.ok(!result.mergeSkipped, 'mergeSkipped should be falsy when prune=true (no merge)');
   });
 
-  it('sorts require.gs to position 0', async () => {
+  it('sorts require.gs to position 0 via orderFilesForPush', async () => {
     const validGs = `function _main() { exports.fn = function() {}; }\n__defineModule__(_main, false);`;
     await fs.writeFile(path.join(tmpDir, 'zzz.gs'), validGs, 'utf-8');
     await fs.writeFile(path.join(tmpDir, 'require.gs'), validGs, 'utf-8');

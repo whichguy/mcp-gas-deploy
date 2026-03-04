@@ -460,13 +460,14 @@ export async function push(
         allLocalNames.push(name);
       }
 
-      // Fetch remote files unconditionally — needed for both merge and git archive.
+      // Fetch remote files unconditionally — needed for merge, git archive, and ordering.
       let mergeSkipped = false;
+      let remoteFiles: GASFile[] = [];
       let remoteOnlyFiles: GASFile[] = [];
       let gitArchived = false;
       let archivedFiles: string[] = [];
       try {
-        const remoteFiles = await fileOps.getProjectFiles(scriptId);
+        remoteFiles = await fileOps.getProjectFiles(scriptId);
         const localNameSet = new Set(localFiles.keys());
         remoteOnlyFiles = remoteFiles.filter(f => !localNameSet.has(f.name));
       } catch {
@@ -489,14 +490,8 @@ export async function push(
         }
       }
 
-      // GAS requires the CommonJS runtime (require / common-js/require) at position 0.
-      fileSet.sort((a, b) => {
-        const aIsRequire = a.name === 'require' || a.name.endsWith('/require');
-        const bIsRequire = b.name === 'require' || b.name.endsWith('/require');
-        if (aIsRequire && !bIsRequire) return -1;
-        if (!aIsRequire && bIsRequire) return 1;
-        return 0;
-      });
+      // Order files: preserve remote positions, group new files by folder, appsscript last.
+      const orderedFiles = orderFilesForPush(fileSet, remoteFiles);
 
       if (options.dryRun) {
         return { success: true, filesPushed: allLocalNames, mergeSkipped, gitArchived, archivedFiles };
@@ -515,7 +510,7 @@ export async function push(
         }
       }
 
-      await fileOps.updateProjectFiles(scriptId, fileSet);
+      await fileOps.updateProjectFiles(scriptId, orderedFiles);
 
       return { success: true, filesPushed: allLocalNames, mergeSkipped, gitArchived, archivedFiles };
     } catch (error: unknown) {
