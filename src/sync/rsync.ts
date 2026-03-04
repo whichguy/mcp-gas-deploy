@@ -109,6 +109,70 @@ function hashContent(content: string): string {
   return createHash('sha256').update(normalized, 'utf-8').digest('hex');
 }
 
+/** Extract folder path from a GAS file name (e.g. "common-js/utils" → "common-js"). */
+function getFolderFromName(name: string): string {
+  const lastSlash = name.lastIndexOf('/');
+  return lastSlash === -1 ? '' : name.substring(0, lastSlash);
+}
+
+/**
+ * Order files for push: three-bucket partitioning (known → new → manifest).
+ *
+ * Uses remote file positions as a template to preserve existing order,
+ * appends new files grouped by folder with common-js/ prioritized,
+ * and ensures appsscript manifest is always last.
+ */
+export function orderFilesForPush(fileSet: GASFile[], remoteFiles: GASFile[]): GASFile[] {
+  if (fileSet.length === 0) return [];
+
+  const remotePositions = new Map<string, number>();
+  for (const rf of remoteFiles) {
+    remotePositions.set(rf.name, rf.position ?? Number.MAX_SAFE_INTEGER);
+  }
+
+  const manifest: GASFile[] = [];
+  const knownFiles: GASFile[] = [];
+  const newFiles: GASFile[] = [];
+
+  for (const file of fileSet) {
+    if (file.name === 'appsscript') {
+      manifest.push(file);
+    } else if (remotePositions.has(file.name)) {
+      knownFiles.push(file);
+    } else {
+      newFiles.push(file);
+    }
+  }
+
+  // Known files: preserve remote order
+  knownFiles.sort((a, b) => remotePositions.get(a.name)! - remotePositions.get(b.name)!);
+
+  // New files: tiered priority sort
+  newFiles.sort((a, b) => {
+    // Tier 0: require always first
+    const aIsRequire = a.name === 'require' || a.name.endsWith('/require');
+    const bIsRequire = b.name === 'require' || b.name.endsWith('/require');
+    if (aIsRequire && !bIsRequire) return -1;
+    if (!aIsRequire && bIsRequire) return 1;
+
+    // Tier 1: common-js/ before other folders
+    const aIsCommonJs = a.name.startsWith('common-js/');
+    const bIsCommonJs = b.name.startsWith('common-js/');
+    if (aIsCommonJs && !bIsCommonJs) return -1;
+    if (!aIsCommonJs && bIsCommonJs) return 1;
+
+    // Tier 2: group by folder
+    const aFolder = getFolderFromName(a.name);
+    const bFolder = getFolderFromName(b.name);
+    if (aFolder !== bFolder) return aFolder < bFolder ? -1 : 1;
+
+    // Tier 3: stable — preserve insertion order
+    return 0;
+  });
+
+  return [...knownFiles, ...newFiles, ...manifest];
+}
+
 /** Read all local .gs/.html/.json files in a directory (recursive). */
 async function readLocalFiles(
   localDir: string,
