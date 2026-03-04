@@ -58,6 +58,7 @@ The server requests these scopes automatically during login:
 | Tool | Purpose | Key Params |
 |------|---------|------------|
 | `auth` | OAuth login / logout / status | `action` |
+| `ls` | List files in a GAS project (metadata only) | `scriptId`, `path?`, `type?` |
 | `pull` | Download GAS project files to local directory | `scriptId`, `targetDir?` |
 | `status` | Compare local vs remote by content hash | `scriptId`, `localDir?` |
 | `push` | Push local files to GAS with CommonJS validation | `scriptId`, `prune?`, `skipValidation?` |
