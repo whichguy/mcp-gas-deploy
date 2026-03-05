@@ -159,8 +159,14 @@ export function orderFilesForPush(fileSet: GASFile[], remoteFiles: GASFile[]): G
     }
   }
 
-  // Known files: preserve remote order
-  knownFiles.sort((a, b) => remotePositions.get(a.name)! - remotePositions.get(b.name)!);
+  // Known files: preserve remote order, but always pin require to position 0
+  knownFiles.sort((a, b) => {
+    const aIsRequire = a.name === 'require' || a.name.endsWith('/require');
+    const bIsRequire = b.name === 'require' || b.name.endsWith('/require');
+    if (aIsRequire && !bIsRequire) return -1;
+    if (!aIsRequire && bIsRequire) return 1;
+    return remotePositions.get(a.name)! - remotePositions.get(b.name)!;
+  });
 
   // New files: tiered priority sort
   newFiles.sort((a, b) => {

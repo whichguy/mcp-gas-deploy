@@ -214,4 +214,36 @@ describe('handleProjectCopyTool', () => {
     assert.equal(result.success, false);
     assert.ok(result.error?.includes('Upload failed') || result.error?.includes('copy failed'), `got: ${result.error}`);
   });
+
+  it('error surfaces orphaned scriptId when updateProjectFiles fails after createProject', async () => {
+    const fileOps = {
+      getProjectFiles: sinon.stub().resolves([gasFile('main')]),
+      updateProjectFiles: sinon.stub().rejects(new Error('Upload failed')),
+    } as unknown as GASFileOperations;
+    const projectOps = makeProjectOps('My Script');
+
+    const result = await handleProjectCopyTool(
+      { scriptId: VALID_SCRIPT_ID },
+      fileOps,
+      projectOps
+    );
+
+    assert.equal(result.success, false);
+    assert.ok(result.error?.includes(NEW_SCRIPT_ID), `error should include orphaned scriptId, got: ${result.error}`);
+    assert.ok(result.hints.orphan, 'hints.orphan should be present');
+    assert.ok(result.hints.orphan.includes(NEW_SCRIPT_ID), `hints.orphan should include orphaned scriptId, got: ${result.hints.orphan}`);
+  });
+
+  it('copy places loadNow files at end via orderFilesForPush', async () => {
+    const loadNowSrc = `function _main() { exports.h = function() {}; }\n__defineModule__(_main, true);`;
+    const regularSrc = `function _main() { exports.fn = function() {}; }\n__defineModule__(_main, false);`;
+    const files: GASFile[] = [
+      { name: 'events', source: loadNowSrc, type: 'SERVER_JS', position: 0 },
+      { name: 'utils', source: regularSrc, type: 'SERVER_JS', position: 1 },
+    ];
+    const fileOps = makeFileOps(files);
+    await handleProjectCopyTool({ scriptId: VALID_SCRIPT_ID }, fileOps, makeProjectOps());
+    const called = (fileOps.updateProjectFiles as sinon.SinonStub).firstCall.args[1] as { name: string }[];
+    assert.equal(called[called.length - 1].name, 'events', 'loadNow file must be last in copy payload');
+  });
 });
