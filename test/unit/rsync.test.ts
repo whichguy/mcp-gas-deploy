@@ -333,6 +333,8 @@ describe('push', () => {
     await push('scriptId', tmpDir, fileOps, { skipValidation: true });
 
     const pushed = (fileOps.updateProjectFiles as sinon.SinonStub).firstCall.args[1] as GASFile[];
+    assert.equal(pushed.length, 2, 'both files must be present in push payload');
+    assert.equal(pushed[0].name, 'utils', 'regular file must be first');
     assert.equal(pushed[pushed.length - 1].name, 'triggers', 'loadNow file must be last in push payload');
   });
 });
@@ -656,7 +658,9 @@ describe('orderFilesForPush', () => {
     ];
 
     const result = orderFilesForPush(fileSet, remote);
+    assert.equal(result.length, 2, 'both files must be present');
     assert.equal(result[0].name, 'require', `require must be first even when remote position has drifted, got: ${result.map(f => f.name)}`);
+    assert.equal(result[1].name, 'main', 'main must be second');
   });
 });
 

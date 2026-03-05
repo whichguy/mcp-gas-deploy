@@ -172,6 +172,7 @@ describe('handleProjectCopyTool', () => {
 
     assert.equal(result.success, false);
     assert.ok(result.error?.includes('Quota exceeded') || result.error?.includes('copy failed'), `got: ${result.error}`);
+    assert.ok(!result.hints.orphan, 'hints.orphan must not be set when createProject itself failed');
   });
 
   it('copy preserves source file order via orderFilesForPush', async () => {
@@ -229,6 +230,7 @@ describe('handleProjectCopyTool', () => {
     );
 
     assert.equal(result.success, false);
+    sinon.assert.calledOnce(projectOps.createProject as sinon.SinonStub);
     assert.ok(result.error?.includes(NEW_SCRIPT_ID), `error should include orphaned scriptId, got: ${result.error}`);
     assert.ok(result.hints.orphan, 'hints.orphan should be present');
     assert.ok(result.hints.orphan.includes(NEW_SCRIPT_ID), `hints.orphan should include orphaned scriptId, got: ${result.hints.orphan}`);
@@ -244,6 +246,7 @@ describe('handleProjectCopyTool', () => {
     const fileOps = makeFileOps(files);
     await handleProjectCopyTool({ scriptId: VALID_SCRIPT_ID }, fileOps, makeProjectOps());
     const called = (fileOps.updateProjectFiles as sinon.SinonStub).firstCall.args[1] as { name: string }[];
+    assert.equal(called[0].name, 'utils', 'non-loadNow file must be first');
     assert.equal(called[called.length - 1].name, 'events', 'loadNow file must be last in copy payload');
   });
 });

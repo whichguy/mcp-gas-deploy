@@ -138,7 +138,7 @@ export async function handleProjectCopyTool(
       error: `Project copy failed: ${message}${orphanNote}`,
       hints: {
         fix: 'Check authentication and that you have access to both the source project and permission to create new projects',
-        ...(newProject ? { orphan: `Delete the empty project at https://script.google.com/home/projects/${newProject.scriptId}/edit` } : {}),
+        ...(newProject ? { orphan: `Delete the empty project at https://script.google.com/projects/${newProject.scriptId}/edit` } : {}),
       },
     };
   }
