@@ -493,6 +493,142 @@ describe('orderFilesForPush', () => {
     // Should preserve insertion order within same folder
     assert.deepEqual(result.map(f => f.name), ['lib/alpha', 'lib/beta', 'lib/gamma']);
   });
+
+  // --- Critical infrastructure pinning ---
+
+  it('ConfigManager before __mcp_exec on first push (empty remote)', () => {
+    const fileSet: GASFile[] = [
+      gasFile('common-js/__mcp_exec'),
+      gasFile('common-js/ConfigManager'),
+      gasFile('main'),
+    ];
+    const remote: GASFile[] = [];
+
+    const result = orderFilesForPush(fileSet, remote);
+    const names = result.map(f => f.name);
+
+    assert.ok(
+      names.indexOf('common-js/ConfigManager') < names.indexOf('common-js/__mcp_exec'),
+      `ConfigManager must precede __mcp_exec, got: ${names}`
+    );
+  });
+
+  it('critical trio (require, ConfigManager, __mcp_exec) at positions 0, 1, 2 on first push', () => {
+    const fileSet: GASFile[] = [
+      gasFile('main'),
+      gasFile('common-js/__mcp_exec'),
+      gasFile('common-js/utils'),
+      gasFile('common-js/ConfigManager'),
+      gasFile('common-js/require'),
+    ];
+    const remote: GASFile[] = [];
+
+    const result = orderFilesForPush(fileSet, remote);
+    const names = result.map(f => f.name);
+
+    assert.equal(names[0], 'common-js/require', `pos 0 must be require, got: ${names}`);
+    assert.equal(names[1], 'common-js/ConfigManager', `pos 1 must be ConfigManager, got: ${names}`);
+    assert.equal(names[2], 'common-js/__mcp_exec', `pos 2 must be __mcp_exec, got: ${names}`);
+  });
+
+  // --- loadNow sorting ---
+
+  it('loadNow files (boolean form) sorted to end before manifest', () => {
+    const loadNowSrc = `function _main() { exports.handler = function() {}; }\n__defineModule__(_main, true);`;
+    const regularSrc = `function _main() { exports.fn = function() {}; }\n__defineModule__(_main, false);`;
+    const fileSet: GASFile[] = [
+      { name: 'triggers', source: loadNowSrc, type: 'SERVER_JS' },
+      { name: 'utils', source: regularSrc, type: 'SERVER_JS' },
+      { name: 'main', source: regularSrc, type: 'SERVER_JS' },
+      { name: 'appsscript', source: '{}', type: 'JSON' },
+    ];
+    const remote: GASFile[] = [];
+
+    const result = orderFilesForPush(fileSet, remote);
+    const names = result.map(f => f.name);
+
+    assert.equal(names[names.length - 1], 'appsscript', 'appsscript must be last');
+    assert.equal(names[names.length - 2], 'triggers', 'loadNow file must be just before manifest');
+    assert.ok(names.indexOf('utils') < names.indexOf('triggers'), `utils must precede triggers, got: ${names}`);
+    assert.ok(names.indexOf('main') < names.indexOf('triggers'), `main must precede triggers, got: ${names}`);
+  });
+
+  it('loadNow files (object form) also detected and sorted to end', () => {
+    const loadNowSrc = `function _main() { exports.doGet = function() {}; }\n__defineModule__(_main, { loadNow: true });`;
+    const regularSrc = `function _main() { exports.fn = function() {}; }\n__defineModule__(_main, false);`;
+    const fileSet: GASFile[] = [
+      { name: 'doGet', source: loadNowSrc, type: 'SERVER_JS' },
+      { name: 'utils', source: regularSrc, type: 'SERVER_JS' },
+    ];
+    const remote: GASFile[] = [];
+
+    const result = orderFilesForPush(fileSet, remote);
+    const names = result.map(f => f.name);
+
+    assert.ok(names.indexOf('utils') < names.indexOf('doGet'), `utils must precede doGet (loadNow), got: ${names}`);
+  });
+
+  it('known loadNow file still moves to end despite lower remote position', () => {
+    const loadNowSrc = `function _main() { exports.onOpen = function() {}; }\n__defineModule__(_main, true);`;
+    const regularSrc = `function _main() { exports.fn = function() {}; }\n__defineModule__(_main, false);`;
+    const fileSet: GASFile[] = [
+      { name: 'events', source: loadNowSrc, type: 'SERVER_JS' },
+      { name: 'utils', source: regularSrc, type: 'SERVER_JS' },
+    ];
+    // events is "known" with remote position 0 (lower than utils at 1)
+    const remote = [
+      gasFileWithPosition('events', 0),
+      gasFileWithPosition('utils', 1),
+    ];
+
+    const result = orderFilesForPush(fileSet, remote);
+    const names = result.map(f => f.name);
+
+    assert.ok(names.indexOf('utils') < names.indexOf('events'), `utils must precede events (loadNow), got: ${names}`);
+  });
+
+  it('multiple loadNow files preserve their relative order at end', () => {
+    const loadNowSrc = (label: string) =>
+      `function _main() { exports.${label} = function() {}; }\n__defineModule__(_main, true);`;
+    const regularSrc = `function _main() { exports.fn = function() {}; }\n__defineModule__(_main, false);`;
+    const fileSet: GASFile[] = [
+      { name: 'main', source: regularSrc, type: 'SERVER_JS' },
+      { name: 'onOpen', source: loadNowSrc('onOpen'), type: 'SERVER_JS' },
+      { name: 'doGet', source: loadNowSrc('doGet'), type: 'SERVER_JS' },
+    ];
+    const remote: GASFile[] = [];
+
+    const result = orderFilesForPush(fileSet, remote);
+    const names = result.map(f => f.name);
+
+    assert.equal(names[0], 'main', `main must be first, got: ${names}`);
+    // Both loadNow files must appear after main
+    assert.ok(names.indexOf('main') < names.indexOf('onOpen'), `main must precede onOpen, got: ${names}`);
+    assert.ok(names.indexOf('main') < names.indexOf('doGet'), `main must precede doGet, got: ${names}`);
+    // Relative order of loadNow files preserved
+    assert.ok(names.indexOf('onOpen') < names.indexOf('doGet'), `onOpen must precede doGet (insertion order), got: ${names}`);
+  });
+
+  it('non-loadNow files preserve relative order when loadNow files are extracted', () => {
+    const loadNowSrc = `function _main() { exports.trigger = function() {}; }\n__defineModule__(_main, true);`;
+    const regularSrc = `function _main() { exports.fn = function() {}; }\n__defineModule__(_main, false);`;
+    const fileSet: GASFile[] = [
+      { name: 'alpha', source: regularSrc, type: 'SERVER_JS' },
+      { name: 'events', source: loadNowSrc, type: 'SERVER_JS' },
+      { name: 'beta', source: regularSrc, type: 'SERVER_JS' },
+      { name: 'gamma', source: regularSrc, type: 'SERVER_JS' },
+    ];
+    const remote: GASFile[] = [];
+
+    const result = orderFilesForPush(fileSet, remote);
+    const names = result.map(f => f.name);
+
+    // Non-loadNow files keep relative order: alpha, beta, gamma
+    assert.ok(names.indexOf('alpha') < names.indexOf('beta'), `alpha before beta, got: ${names}`);
+    assert.ok(names.indexOf('beta') < names.indexOf('gamma'), `beta before gamma, got: ${names}`);
+    // All before loadNow
+    assert.ok(names.indexOf('gamma') < names.indexOf('events'), `gamma before events (loadNow), got: ${names}`);
+  });
 });
 
 // --- push git archive ---

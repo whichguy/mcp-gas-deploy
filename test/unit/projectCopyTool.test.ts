@@ -31,8 +31,8 @@ function makeProjectOps(title: string | null = 'My Script'): GASProjectOperation
   } as unknown as GASProjectOperations;
 }
 
-function gasFile(name: string, source = `// ${name}`): GASFile {
-  return { name, source, type: 'SERVER_JS' };
+function gasFile(name: string, source = `// ${name}`, position?: number): GASFile {
+  return { name, source, type: 'SERVER_JS', ...(position !== undefined ? { position } : {}) };
 }
 
 describe('handleProjectCopyTool', () => {
@@ -172,6 +172,30 @@ describe('handleProjectCopyTool', () => {
 
     assert.equal(result.success, false);
     assert.ok(result.error?.includes('Quota exceeded') || result.error?.includes('copy failed'), `got: ${result.error}`);
+  });
+
+  it('copy preserves source file order via orderFilesForPush', async () => {
+    // Source project has files with explicit positions — copy should pass them through
+    // orderFilesForPush treats all files as "known" (same positions as source), preserving order.
+    const files = [
+      gasFile('require', '// require', 0),
+      gasFile('common-js/ConfigManager', '// cm', 1),
+      gasFile('main', '// main', 2),
+      { name: 'appsscript', source: '{}', type: 'JSON' as const, position: 3 },
+    ];
+    const fileOps = makeFileOps(files);
+    const projectOps = makeProjectOps('Source');
+
+    await handleProjectCopyTool({ scriptId: VALID_SCRIPT_ID }, fileOps, projectOps);
+
+    const calledFiles = (fileOps.updateProjectFiles as sinon.SinonStub).firstCall.args[1] as { name: string }[];
+    const names = calledFiles.map(f => f.name);
+    assert.equal(names[0], 'require', `require must be first, got: ${names}`);
+    assert.equal(names[names.length - 1], 'appsscript', `appsscript must be last, got: ${names}`);
+    assert.ok(
+      names.indexOf('common-js/ConfigManager') < names.indexOf('main'),
+      `ConfigManager must precede main, got: ${names}`
+    );
   });
 
   it('returns error when updateProjectFiles fails after project creation', async () => {

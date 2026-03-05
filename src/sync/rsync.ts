@@ -115,6 +115,21 @@ function getFolderFromName(name: string): string {
   return lastSlash === -1 ? '' : name.substring(0, lastSlash);
 }
 
+/** Priority within common-js/: ConfigManager=1, __mcp_exec=2, other common-js=3, non-common-js=4 */
+function getCommonJsPriority(name: string): number {
+  if (name === 'common-js/ConfigManager') return 1;
+  if (name === 'common-js/__mcp_exec') return 2;
+  if (name.startsWith('common-js/')) return 3;
+  return 4;
+}
+
+/** Returns true if the file uses loadNow: true (eager execution at parse time). */
+function isLoadNow(f: GASFile): boolean {
+  const src = f.source ?? '';
+  return /__defineModule__\s*\(\s*_main\s*,\s*true\s*\)/.test(src) ||
+    /__defineModule__\s*\(\s*_main\s*,\s*\{[^}]*loadNow\s*:\s*true[^}]*\}\s*\)/.test(src);
+}
+
 /**
  * Order files for push: three-bucket partitioning (known → new → manifest).
  *
@@ -155,11 +170,10 @@ export function orderFilesForPush(fileSet: GASFile[], remoteFiles: GASFile[]): G
     if (aIsRequire && !bIsRequire) return -1;
     if (!aIsRequire && bIsRequire) return 1;
 
-    // Tier 1: common-js/ before other folders
-    const aIsCommonJs = a.name.startsWith('common-js/');
-    const bIsCommonJs = b.name.startsWith('common-js/');
-    if (aIsCommonJs && !bIsCommonJs) return -1;
-    if (!aIsCommonJs && bIsCommonJs) return 1;
+    // Tier 1: common-js/ before other folders, with critical infra pinned
+    const aCommonJsPriority = getCommonJsPriority(a.name);
+    const bCommonJsPriority = getCommonJsPriority(b.name);
+    if (aCommonJsPriority !== bCommonJsPriority) return aCommonJsPriority - bCommonJsPriority;
 
     // Tier 2: group by folder
     const aFolder = getFolderFromName(a.name);
@@ -170,7 +184,11 @@ export function orderFilesForPush(fileSet: GASFile[], remoteFiles: GASFile[]): G
     return 0;
   });
 
-  return [...knownFiles, ...newFiles, ...manifest];
+  const ordered = [...knownFiles, ...newFiles];
+  const nonLoadNow = ordered.filter(f => !isLoadNow(f));
+  const loadNowFiles = ordered.filter(f => isLoadNow(f));
+
+  return [...nonLoadNow, ...loadNowFiles, ...manifest];
 }
 
 /** Read all local .gs/.html/.json files in a directory (recursive). */
