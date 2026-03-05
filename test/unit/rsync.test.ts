@@ -322,6 +322,19 @@ describe('push', () => {
     const pushedFiles = (fileOps.updateProjectFiles as sinon.SinonStub).firstCall.args[1] as GASFile[];
     assert.equal(pushedFiles[0].name, 'require');
   });
+
+  it('loadNow files sorted to end of push payload', async () => {
+    const loadNowGs = `function _main() { exports.h = function() {}; }\n__defineModule__(_main, true);`;
+    const regularGs = `function _main() { exports.fn = function() {}; }\n__defineModule__(_main, false);`;
+    await fs.writeFile(path.join(tmpDir, 'triggers.gs'), loadNowGs, 'utf-8');
+    await fs.writeFile(path.join(tmpDir, 'utils.gs'), regularGs, 'utf-8');
+    const fileOps = makeFileOps([]);
+
+    await push('scriptId', tmpDir, fileOps, { skipValidation: true });
+
+    const pushed = (fileOps.updateProjectFiles as sinon.SinonStub).firstCall.args[1] as GASFile[];
+    assert.equal(pushed[pushed.length - 1].name, 'triggers', 'loadNow file must be last in push payload');
+  });
 });
 
 // --- orderFilesForPush ---
@@ -628,6 +641,22 @@ describe('orderFilesForPush', () => {
     assert.ok(names.indexOf('beta') < names.indexOf('gamma'), `beta before gamma, got: ${names}`);
     // All before loadNow
     assert.ok(names.indexOf('gamma') < names.indexOf('events'), `gamma before events (loadNow), got: ${names}`);
+  });
+
+  it('require re-pinned to position 0 when remote position has drifted', () => {
+    const regularSrc = `function _main() { exports.fn = function() {}; }\n__defineModule__(_main, false);`;
+    // Remote has main at pos 0, require at pos 1 (drifted from expected position 0)
+    const fileSet: GASFile[] = [
+      { name: 'main', source: regularSrc, type: 'SERVER_JS' },
+      { name: 'require', source: regularSrc, type: 'SERVER_JS' },
+    ];
+    const remote: GASFile[] = [
+      { name: 'main', source: regularSrc, type: 'SERVER_JS', position: 0 },
+      { name: 'require', source: regularSrc, type: 'SERVER_JS', position: 1 },
+    ];
+
+    const result = orderFilesForPush(fileSet, remote);
+    assert.equal(result[0].name, 'require', `require must be first even when remote position has drifted, got: ${result.map(f => f.name)}`);
   });
 });
 

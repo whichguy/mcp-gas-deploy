@@ -85,6 +85,7 @@ export async function handleProjectCopyTool(
     };
   }
 
+  let newProject: { scriptId: string; title: string } | undefined;
   try {
     // Resolve the title for the new project
     const sourceTitle = await projectOps.getProjectTitle(scriptId);
@@ -102,7 +103,7 @@ export async function handleProjectCopyTool(
     }
 
     // Create the new project
-    const newProject = await projectOps.createProject(newTitle);
+    newProject = await projectOps.createProject(newTitle);
 
     // Upload all source files to the new project atomically, preserving source project order
     const filesToCopy = sourceFiles.map(f => ({ name: f.name, type: f.type, source: f.source ?? '' }));
@@ -129,10 +130,16 @@ export async function handleProjectCopyTool(
     };
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
+    const orphanNote = newProject
+      ? ` An empty project was created (${newProject.scriptId}) and must be deleted manually via the Apps Script console.`
+      : '';
     return {
       success: false,
-      error: `Project copy failed: ${message}`,
-      hints: { fix: 'Check authentication and that you have access to both the source project and permission to create new projects' },
+      error: `Project copy failed: ${message}${orphanNote}`,
+      hints: {
+        fix: 'Check authentication and that you have access to both the source project and permission to create new projects',
+        ...(newProject ? { orphan: `Delete the empty project at https://script.google.com/home/projects/${newProject.scriptId}/edit` } : {}),
+      },
     };
   }
 }
