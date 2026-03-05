@@ -21,6 +21,7 @@
 import { GASFileOperations } from '../api/gasFileOperations.js';
 import { GASProjectOperations } from '../api/gasProjectOperations.js';
 import { SCRIPT_ID_PATTERN } from '../utils/validation.js';
+import { orderFilesForPush } from '../sync/rsync.js';
 
 export interface ProjectCopyToolParams {
   scriptId: string;
@@ -103,11 +104,10 @@ export async function handleProjectCopyTool(
     // Create the new project
     const newProject = await projectOps.createProject(newTitle);
 
-    // Upload all source files to the new project atomically
-    await fileOps.updateProjectFiles(
-      newProject.scriptId,
-      sourceFiles.map(f => ({ name: f.name, type: f.type, source: f.source ?? '' }))
-    );
+    // Upload all source files to the new project atomically, preserving source project order
+    const filesToCopy = sourceFiles.map(f => ({ name: f.name, type: f.type, source: f.source ?? '' }));
+    const orderedFiles = orderFilesForPush(filesToCopy, sourceFiles);
+    await fileOps.updateProjectFiles(newProject.scriptId, orderedFiles);
 
     const warnings: string[] = [
       'Script properties (PropertiesService) are NOT copied — set them manually in the new project',
