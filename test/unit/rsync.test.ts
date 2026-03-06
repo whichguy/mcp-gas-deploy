@@ -876,3 +876,204 @@ describe('pull', () => {
     assert.ok(stat.isDirectory());
   });
 });
+
+// --- push — extra files on either side ---
+
+describe('push — extra files on either side', () => {
+  let tmpDir: string;
+  const validGs = `function _main() { exports.fn = function() {}; }\n__defineModule__(_main, false);`;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'rsync-push-extra-'));
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+    sinon.restore();
+  });
+
+  it('merge sends remote-only files with full object fields', async () => {
+    await fs.writeFile(path.join(tmpDir, 'main.gs'), validGs, 'utf-8');
+    const fileOps = makeFileOps([gasFile('main', validGs), gasFile('ghost', '// ghost-content')]);
+
+    await push('scriptId', tmpDir, fileOps, { skipValidation: true });
+
+    const payload = (fileOps.updateProjectFiles as sinon.SinonStub).firstCall.args[1] as GASFile[];
+    const ghost = payload.find(f => f.name === 'ghost');
+    assert.ok(ghost, 'ghost should be in payload');
+    assert.equal(ghost!.source, '// ghost-content');
+    assert.equal(ghost!.type, 'SERVER_JS');
+  });
+
+  it('merge with extras on both sides sends all three files', async () => {
+    await fs.writeFile(path.join(tmpDir, 'main.gs'), validGs, 'utf-8');
+    await fs.writeFile(path.join(tmpDir, 'new-local.gs'), validGs, 'utf-8');
+    const fileOps = makeFileOps([gasFile('main', validGs), gasFile('ghost', '// ghost')]);
+
+    await push('scriptId', tmpDir, fileOps, { skipValidation: true });
+
+    const payload = (fileOps.updateProjectFiles as sinon.SinonStub).firstCall.args[1] as GASFile[];
+    assert.equal(payload.length, 3);
+    const names = payload.map(f => f.name);
+    assert.ok(names.includes('main'));
+    assert.ok(names.includes('new-local'));
+    assert.ok(names.includes('ghost'));
+  });
+
+  it('prune excludes remote-only from payload', async () => {
+    await fs.writeFile(path.join(tmpDir, 'main.gs'), validGs, 'utf-8');
+    const fileOps = makeFileOps([gasFile('main', validGs), gasFile('ghost', '// ghost')]);
+
+    await push('scriptId', tmpDir, fileOps, { skipValidation: true, prune: true });
+
+    const payload = (fileOps.updateProjectFiles as sinon.SinonStub).firstCall.args[1] as GASFile[];
+    assert.equal(payload.length, 1);
+    assert.equal(payload[0].name, 'main');
+    assert.ok(!payload.find(f => f.name === 'ghost'), 'ghost should not be in pruned payload');
+  });
+
+  it('prune with extras on both sides sends only local files', async () => {
+    await fs.writeFile(path.join(tmpDir, 'main.gs'), validGs, 'utf-8');
+    await fs.writeFile(path.join(tmpDir, 'new-local.gs'), validGs, 'utf-8');
+    const fileOps = makeFileOps([gasFile('main', validGs), gasFile('ghost', '// ghost')]);
+
+    await push('scriptId', tmpDir, fileOps, { skipValidation: true, prune: true });
+
+    const payload = (fileOps.updateProjectFiles as sinon.SinonStub).firstCall.args[1] as GASFile[];
+    assert.equal(payload.length, 2);
+    const names = payload.map(f => f.name);
+    assert.ok(names.includes('main'));
+    assert.ok(names.includes('new-local'));
+    assert.ok(!names.includes('ghost'), 'ghost should not be in pruned payload');
+  });
+
+  it('merge preserves source content of remote-only files', async () => {
+    await fs.writeFile(path.join(tmpDir, 'main.gs'), validGs, 'utf-8');
+    const fileOps = makeFileOps([gasFile('main', validGs), gasFile('config', '// config-marker')]);
+
+    await push('scriptId', tmpDir, fileOps, { skipValidation: true });
+
+    const payload = (fileOps.updateProjectFiles as sinon.SinonStub).firstCall.args[1] as GASFile[];
+    const config = payload.find(f => f.name === 'config');
+    assert.ok(config, 'config should be in payload');
+    assert.equal(config!.source, '// config-marker');
+  });
+});
+
+// --- pull — interaction with existing local state ---
+
+describe('pull — interaction with existing local state', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'rsync-pull-existing-'));
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+    sinon.restore();
+  });
+
+  it('pull overwrites diverged local file content', async () => {
+    await fs.writeFile(path.join(tmpDir, 'main.gs'), '// old content', 'utf-8');
+    const fileOps = makeFileOps([gasFile('main', '// new content')]);
+
+    await pull('scriptId', tmpDir, fileOps);
+
+    const content = await fs.readFile(path.join(tmpDir, 'main.gs'), 'utf-8');
+    assert.equal(content, '// new content');
+  });
+
+  it('pull does not delete local-only files', async () => {
+    await fs.writeFile(path.join(tmpDir, 'local-only.gs'), '// mine', 'utf-8');
+    const fileOps = makeFileOps([gasFile('main', '// main')]);
+
+    await pull('scriptId', tmpDir, fileOps);
+
+    const content = await fs.readFile(path.join(tmpDir, 'local-only.gs'), 'utf-8');
+    assert.equal(content, '// mine');
+  });
+
+  it('pull overwrites existing and creates new remote files simultaneously', async () => {
+    await fs.writeFile(path.join(tmpDir, 'existing.gs'), '// old', 'utf-8');
+    const fileOps = makeFileOps([
+      gasFile('existing', '// updated'),
+      gasFile('brand-new', '// brand-new-content'),
+    ]);
+
+    const result = await pull('scriptId', tmpDir, fileOps);
+
+    const existing = await fs.readFile(path.join(tmpDir, 'existing.gs'), 'utf-8');
+    assert.equal(existing, '// updated');
+    const brandNew = await fs.readFile(path.join(tmpDir, 'brand-new.gs'), 'utf-8');
+    assert.equal(brandNew, '// brand-new-content');
+    assert.ok(result.filesPulled.includes('existing.gs'));
+    assert.ok(result.filesPulled.includes('brand-new.gs'));
+  });
+
+  it('pull writes JSON file (appsscript) with .json extension', async () => {
+    const fileOps = makeFileOps([{ name: 'appsscript', source: '{}', type: 'JSON' }]);
+
+    await pull('scriptId', tmpDir, fileOps);
+
+    const content = await fs.readFile(path.join(tmpDir, 'appsscript.json'), 'utf-8');
+    assert.equal(content, '{}');
+    await assert.rejects(
+      () => fs.access(path.join(tmpDir, 'appsscript.gs')),
+      { code: 'ENOENT' },
+      'appsscript.gs should not exist'
+    );
+  });
+});
+
+// --- status integration after sync ---
+
+describe('status integration after sync', () => {
+  let tmpDir: string;
+  const validGs = `function _main() { exports.fn = function() {}; }\n__defineModule__(_main, false);`;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'rsync-status-integration-'));
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+    sinon.restore();
+  });
+
+  it('getStatus after merge push shows all files in-sync', async () => {
+    await fs.writeFile(path.join(tmpDir, 'main.gs'), validGs, 'utf-8');
+    await fs.writeFile(path.join(tmpDir, 'new-local.gs'), validGs, 'utf-8');
+    const fileOps = makeFileOps([gasFile('main', validGs), gasFile('ghost', validGs)]);
+
+    await push('scriptId', tmpDir, fileOps, { skipValidation: true });
+    const mergedPayload = (fileOps.updateProjectFiles as sinon.SinonStub).firstCall.args[1] as GASFile[];
+
+    (fileOps.getProjectFiles as sinon.SinonStub).resolves(mergedPayload);
+    const status = await getStatus('scriptId', tmpDir, fileOps);
+
+    assert.equal(status.localOnly.length, 0);
+    assert.equal(status.remoteOnly.length, 1); // ghost was not written locally by merge push
+    assert.equal(status.modified.length, 0);
+    const bothNames = status.both.map(f => f.name);
+    assert.ok(bothNames.includes('main'));
+    assert.ok(bothNames.includes('new-local'));
+  });
+
+  it('getStatus after pull: remote synced, local-only preserved', async () => {
+    await fs.writeFile(path.join(tmpDir, 'main.gs'), '// old', 'utf-8');
+    await fs.writeFile(path.join(tmpDir, 'local-only.gs'), '// mine', 'utf-8');
+    const fileOps = makeFileOps([gasFile('main', '// updated'), gasFile('remote-new', validGs)]);
+
+    await pull('scriptId', tmpDir, fileOps);
+    const status = await getStatus('scriptId', tmpDir, fileOps);
+
+    assert.equal(status.remoteOnly.length, 0);
+    assert.equal(status.modified.length, 0);
+    const bothNames = status.both.map(f => f.name);
+    assert.ok(bothNames.includes('main'));
+    assert.ok(bothNames.includes('remote-new'));
+    const localOnlyNames = status.localOnly.map(f => f.name);
+    assert.ok(localOnlyNames.includes('local-only'));
+  });
+});
