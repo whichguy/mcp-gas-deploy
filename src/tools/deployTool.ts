@@ -270,7 +270,7 @@ export async function handleDeployTool(
       return {
         success: true,
         action: 'list-versions',
-        versions: versions.map(v => ({
+        versions: versions.slice(0, limit).map(v => ({
           versionNumber: v.versionNumber,
           description: v.description,
           createTime: v.createTime,
