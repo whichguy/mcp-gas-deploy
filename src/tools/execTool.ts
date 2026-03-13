@@ -275,7 +275,10 @@ export async function handleExecTool(
       if (!location) break;
       const redirectUrl = new URL(location, currentUrl);
       currentUrl = redirectUrl.toString();
-      if (!redirectUrl.hostname.endsWith('.google.com') && redirectUrl.hostname !== 'google.com') {
+      const isGoogleHost = redirectUrl.hostname.endsWith('.google.com')
+        || redirectUrl.hostname === 'google.com'
+        || redirectUrl.hostname.endsWith('.googleusercontent.com');
+      if (!isGoogleHost) {
         // Non-Google redirect — stop following; let the final response be handled below
         break;
       }
@@ -331,7 +334,7 @@ export async function handleExecTool(
       logger_output?: string;
     };
 
-    if (data.success === false) {
+    if (data.success !== true) {
       return {
         success: false, filesSync,
         error: data.error ?? 'Unknown execution error',

@@ -34,7 +34,6 @@ import { handleStatusTool } from '../../src/tools/statusTool.js';
 import { handleProjectsTool } from '../../src/tools/projectsTool.js';
 import { handleDeployTool } from '../../src/tools/deployTool.js';
 import { handleExecTool } from '../../src/tools/execTool.js';
-import { getDeploymentInfo } from '../../src/config/deployConfig.js';
 
 // Setup chain mirrors src/server.ts wiring
 const sessionManager = new SessionManager();
@@ -167,20 +166,23 @@ describe('mcp-gas-deploy E2E', function () {
   });
 
   it('T8: exec: hello.greet() returns expected string', async function () {
-    // Skip guard: T6 (deploy) must have completed so stagingUrl is present
-    const deployInfo = await getDeploymentInfo(tmpDir, scriptId);
-    if (!deployInfo.stagingUrl) {
-      return this.skip();
+    // T8 uses a persistent pre-authorized fixture project so browser authorization
+    // does not block automated runs. Set it up once with: npm run setup:exec-fixture
+    const EXEC_FIXTURE_PATH = path.join(os.homedir(), '.cache', 'mcp-gas-deploy-test', 'exec-project.json');
+    let fixture: { scriptId: string; localDir: string } | undefined;
+    try {
+      fixture = JSON.parse(await fs.readFile(EXEC_FIXTURE_PATH, 'utf-8'));
+    } catch {
+      return this.skip(); // fixture not set up — run: npm run setup:exec-fixture
     }
 
     const result = await handleExecTool(
-      { scriptId, localDir: tmpDir, module: 'hello', function: 'greet' },
+      { scriptId: fixture!.scriptId, localDir: fixture!.localDir, module: 'hello', function: 'greet' },
       fileOps,
       sessionManager,
-      deployOps
+      deployOps,
     );
-    // New GAS web apps require one-time browser authorization by the owner before
-    // programmatic exec works. Skip gracefully instead of failing.
+    // Skip if still needs browser authorization (fixture project not yet authorized)
     if (!result.success && result.error?.includes('browser authorization')) {
       return this.skip();
     }
@@ -188,7 +190,7 @@ describe('mcp-gas-deploy E2E', function () {
     assert.ok(result.success, `exec failed: ${result.error}`);
     assert.ok(
       String(result.result).includes('Hello'),
-      `Expected result to include 'Hello', got: ${JSON.stringify(result.result)}`
+      `Expected result to include 'Hello', got: ${JSON.stringify(result.result)}`,
     );
   });
 });
