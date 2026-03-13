@@ -17,6 +17,7 @@
 import { describe, it, before, after } from 'mocha';
 import { strict as assert } from 'node:assert';
 import { promises as fs } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import os from 'node:os';
 
@@ -44,7 +45,8 @@ const projectOps = new GASProjectOperations(authOps);
 
 const REQUIRE_GS = path.join(os.homedir(), 'src/mcp_gas/gas-runtime/common-js/require.gs');
 const MCP_EXEC_GS = path.join(os.homedir(), 'src/mcp_gas/gas-runtime/common-js/__mcp_exec.gs');
-const GAS_FILES_DIR = path.join(process.cwd(), 'test/e2e/gas-files');
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const GAS_FILES_DIR = path.join(__dirname, 'gas-files');
 
 describe('mcp-gas-deploy E2E', function () {
   this.timeout(120_000);
@@ -104,8 +106,9 @@ describe('mcp-gas-deploy E2E', function () {
   it('T2: status: in sync after initial push', async function () {
     const result = await handleStatusTool({ scriptId, localDir: tmpDir }, fileOps);
     assert.ok(result.success, `status failed: ${result.error}`);
-    assert.strictEqual(result.status?.modified.length, 0, 'Expected no modified files');
-    assert.strictEqual(result.status?.localOnly.length, 0, 'Expected no local-only files');
+    assert.ok(result.status, 'Expected status object in result');
+    assert.strictEqual(result.status.modified.length, 0, 'Expected no modified files');
+    assert.strictEqual(result.status.localOnly.length, 0, 'Expected no local-only files');
   });
 
   it('T3: pull: writes remote files to new dir, content matches', async function () {
@@ -127,8 +130,9 @@ describe('mcp-gas-deploy E2E', function () {
     try {
       const result = await handleStatusTool({ scriptId, localDir: tmpDir }, fileOps);
       assert.ok(result.success, `status failed: ${result.error}`);
+      assert.ok(result.status, 'Expected status object in result');
       assert.ok(
-        result.status?.modified.some(f => f.name === 'hello'),
+        result.status.modified.some(f => f.name === 'hello'),
         'Expected hello in modified list'
       );
     } finally {
