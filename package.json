@@ -11,8 +11,9 @@
     "start": "npm run build && node dist/server.js",
     "clean": "rm -rf dist/",
     "lint": "eslint src/",
-    "test": "node --import tsx node_modules/.bin/mocha 'test/**/*.test.ts' --timeout 30000",
-    "test:unit": "node --import tsx node_modules/.bin/mocha 'test/unit/**/*.test.ts' --timeout 15000"
+    "test": "node --import tsx node_modules/.bin/mocha 'test/**/*.test.ts' --ignore 'test/e2e/**' --timeout 30000",
+    "test:unit": "node --import tsx node_modules/.bin/mocha 'test/unit/**/*.test.ts' --timeout 15000",
+    "test:e2e": "node --import tsx node_modules/.bin/mocha 'test/e2e/e2e.test.ts' --timeout 120000"
   },
   "engines": {
     "node": ">=18"
