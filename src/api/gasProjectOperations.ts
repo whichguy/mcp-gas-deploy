@@ -101,4 +101,14 @@ export class GASProjectOperations {
       return { scriptId, title: (response.data.title as string) ?? title };
     });
   }
+
+  /**
+   * Permanently delete a GAS project via Drive API.
+   * Used by E2E test teardown to clean up temp projects.
+   */
+  async trashProject(scriptId: string): Promise<void> {
+    return this.authOps.makeDriveRequest(async (driveApi) => {
+      await driveApi.files.delete({ fileId: scriptId });
+    });
+  }
 }
