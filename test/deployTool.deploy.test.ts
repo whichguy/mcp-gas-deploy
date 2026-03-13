@@ -330,3 +330,82 @@ describe('deployTool deploy action (circular buffer)', () => {
     assert.ok(typeof slotDesc === 'string' && slotDesc.includes('T'), 'slot description should be ISO timestamp');
   });
 });
+
+describe('deployTool list-versions action', () => {
+  function makeVersions(count: number): Array<{ versionNumber: number; createTime: string; description?: string }> {
+    return Array.from({ length: count }, (_, i) => ({
+      versionNumber: i + 1,
+      createTime: `2024-01-0${(i % 9) + 1}T00:00:00.000Z`,
+    }));
+  }
+
+  it('returns versions with versionNumber and createTime', async () => {
+    const versions = makeVersions(2);
+    const deployOps = makeDeployOps({
+      listVersions: sinon.stub().resolves(versions),
+    });
+
+    const result = await handleDeployTool(
+      { scriptId: VALID_SCRIPT_ID, action: 'list-versions' },
+      makeFileOps(),
+      deployOps,
+    );
+
+    assert.equal(result.success, true, `expected success, got: ${result.error}`);
+    assert.equal(result.action, 'list-versions');
+    assert.ok(Array.isArray(result.versions), 'versions should be an array');
+    assert.equal(result.versions?.length, 2);
+    assert.ok(result.versions?.[0].versionNumber, 'versionNumber should be set');
+    assert.ok(result.versions?.[0].createTime, 'createTime should be set');
+  });
+
+  it('empty project returns empty versions array with count 0', async () => {
+    const deployOps = makeDeployOps({
+      listVersions: sinon.stub().resolves([]),
+    });
+
+    const result = await handleDeployTool(
+      { scriptId: VALID_SCRIPT_ID, action: 'list-versions' },
+      makeFileOps(),
+      deployOps,
+    );
+
+    assert.equal(result.success, true);
+    assert.deepEqual(result.versions, []);
+    assert.equal(result.versionBudget?.used, 0);
+  });
+
+  it('API failure returns success:false with error message', async () => {
+    const deployOps = makeDeployOps({
+      listVersions: sinon.stub().rejects(new Error('401 Unauthorized')),
+    });
+
+    const result = await handleDeployTool(
+      { scriptId: VALID_SCRIPT_ID, action: 'list-versions' },
+      makeFileOps(),
+      deployOps,
+    );
+
+    assert.equal(result.success, false);
+    assert.ok(result.error, 'error should be set');
+  });
+
+  it('versions are capped at 200 when API returns more than the budget limit', async () => {
+    const deployOps = makeDeployOps({
+      listVersions: sinon.stub().resolves(makeVersions(201)),
+    });
+
+    const result = await handleDeployTool(
+      { scriptId: VALID_SCRIPT_ID, action: 'list-versions' },
+      makeFileOps(),
+      deployOps,
+    );
+
+    assert.equal(result.success, true);
+    assert.ok(
+      (result.versions?.length ?? 0) <= 200,
+      `versions should be capped at 200, got: ${result.versions?.length}`,
+    );
+    assert.equal(result.versionBudget?.used, 201, 'versionBudget.used should reflect actual count');
+  });
+});
