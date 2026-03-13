@@ -521,16 +521,23 @@ export async function push(
         return { success: true, filesPushed: allLocalNames, mergeSkipped, gitArchived, archivedFiles };
       }
 
-      // Validate all .gs files before pushing
-      if (!options.skipValidation && gsFilesForValidation.length > 0) {
-        const validationErrors = validateFilesErrors(gsFilesForValidation);
-        if (validationErrors.length > 0) {
-          return {
-            success: false,
-            filesPushed: [],
-            validationErrors,
-            error: `Validation failed for ${validationErrors.length} file(s)`,
-          };
+      // Validate using ordered positions so REQUIRE_POSITION reflects the actual push sequence.
+      // Raw local iteration order is alphabetical and does not guarantee require.gs is first;
+      // orderedFiles from orderFilesForPush always places require at position 0.
+      if (!options.skipValidation) {
+        const gsForValidation = orderedFiles
+          .filter(f => f.type === 'SERVER_JS')
+          .map((f, i) => ({ name: f.name, source: f.source ?? '', position: i }));
+        if (gsForValidation.length > 0) {
+          const validationErrors = validateFilesErrors(gsForValidation);
+          if (validationErrors.length > 0) {
+            return {
+              success: false,
+              filesPushed: [],
+              validationErrors,
+              error: `Validation failed for ${validationErrors.length} file(s)`,
+            };
+          }
         }
       }
 

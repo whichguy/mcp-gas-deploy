@@ -19,8 +19,8 @@ const GAS_SCOPES = [
   'https://www.googleapis.com/auth/script.projects',
   'https://www.googleapis.com/auth/script.deployments',
   'https://www.googleapis.com/auth/script.webapp.deploy',
-  'https://www.googleapis.com/auth/drive.file',
-  'https://www.googleapis.com/auth/drive.readonly', // projects tool: list/search standalone GAS scripts
+  'https://www.googleapis.com/auth/drive', // trashProject (delete) + list/search standalone GAS scripts
+  // drive.file is insufficient for deleting Script-API-created projects (appNotAuthorizedToFile)
   'https://www.googleapis.com/auth/userinfo.email',
   'https://www.googleapis.com/auth/userinfo.profile',
 ];

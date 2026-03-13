@@ -647,10 +647,15 @@ export async function handleDeployTool(
       deploymentId = updated.deploymentId;
       webAppUrl = updated.webAppUrl;
     } else {
-      // No pointer yet — find a web app deployment to reuse, or create a new one
+      // No pointer yet — find a versioned web app deployment to reuse, or create a new one.
+      // Exclude HEAD (versionNumber=0) — it is read-only and cannot be pinned.
+      // Exclude current slot IDs — slots and pointer must remain separate deployments.
       const deployments = await deployOps.listDeployments(scriptId);
+      const slotIdSet = new Set(slotIds);
       const webAppDeployment = deployments.find(d =>
-        d.entryPoints?.some(ep => ep.entryPointType === 'WEB_APP')
+        d.entryPoints?.some(ep => ep.entryPointType === 'WEB_APP') &&
+        (d.deploymentConfig?.versionNumber ?? 0) > 0 &&
+        !slotIdSet.has(d.deploymentId)
       );
 
       if (webAppDeployment) {
