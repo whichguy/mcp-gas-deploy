@@ -309,6 +309,20 @@ export async function handleExecTool(
       };
     }
 
+    // A 200 OK with text/html content-type means a browser authorization page —
+    // GAS web apps require one-time owner authorization via browser on new projects.
+    const contentType = response.headers.get('content-type') ?? '';
+    if (contentType.includes('text/html')) {
+      return {
+        success: false, filesSync,
+        error: `Web app needs browser authorization. Visit the URL in Chrome to authorize: ${normalizedUrl}`,
+        hints: {
+          fix: 'Open the deployment URL in a browser signed in as the script owner, then retry exec',
+          exports: 'Function must be exported inside _main(): exports.myFn = function(){...} — bare function declarations are NOT callable via exec',
+        },
+      };
+    }
+
     // Response format from __mcp_exec.gs: { success, result, logger_output } or { success, error, logger_output }
     const data = await response.json() as {
       success?: boolean;

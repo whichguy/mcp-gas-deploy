@@ -179,6 +179,12 @@ describe('mcp-gas-deploy E2E', function () {
       sessionManager,
       deployOps
     );
+    // New GAS web apps require one-time browser authorization by the owner before
+    // programmatic exec works. Skip gracefully instead of failing.
+    if (!result.success && result.error?.includes('browser authorization')) {
+      return this.skip();
+    }
+
     assert.ok(result.success, `exec failed: ${result.error}`);
     assert.ok(
       String(result.result).includes('Hello'),

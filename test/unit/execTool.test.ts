@@ -50,11 +50,14 @@ function makeFetchResponse(opts: {
   json?: Record<string, unknown>;
   text?: string;
   location?: string;
+  contentType?: string;
 }): Response {
-  const { status = 200, json: jsonBody, text: textBody = '', location } = opts;
+  const { status = 200, json: jsonBody, text: textBody = '', location, contentType } = opts;
   const ok = status >= 200 && status < 300;
   const headers: Record<string, string> = {};
   if (location) headers['location'] = location;
+  // Default content-type: application/json when json body provided, text/plain otherwise
+  headers['content-type'] = contentType ?? (jsonBody !== undefined ? 'application/json' : 'text/plain');
   return {
     status,
     ok,
@@ -251,6 +254,27 @@ describe('handleExecTool', () => {
     assert.ok(
       result.hints.fix?.includes('browser') || result.hints.fix?.includes('Browser'),
       `hint should mention browser, got: ${result.hints.fix}`,
+    );
+  });
+
+  it('HTML 200 response (new project browser auth) triggers authorization hint', async () => {
+    sinon.stub(globalThis, 'fetch').resolves(
+      makeFetchResponse({
+        status: 200,
+        text: '<!DOCTYPE html><html><body>Authorize access</body></html>',
+        contentType: 'text/html; charset=utf-8',
+      }),
+    );
+
+    const result = await handleExecTool(
+      { scriptId: VALID_SCRIPT_ID, function: 'myFn', localDir: tmpDir },
+      makeFileOps(), makeSession(), makeDeployOps(),
+    );
+
+    assert.equal(result.success, false);
+    assert.ok(
+      result.error?.includes('browser authorization'),
+      `got: ${result.error}`,
     );
   });
 
