@@ -192,3 +192,106 @@ describe('handlePushTool', () => {
     );
   });
 });
+
+// --- action=preview ---
+
+describe('handlePushTool action=preview', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    const base = path.join(os.homedir(), '.cache', 'mcp-gas-deploy-test');
+    await fs.mkdir(base, { recursive: true });
+    tmpDir = await fs.mkdtemp(path.join(base, 'push-preview-'));
+  });
+
+  afterEach(async () => {
+    sinon.restore();
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('action=preview returns preview object with all four buckets', async () => {
+    const updatedGs = `function _main() { exports.fn = function() { return 42; }; }\n__defineModule__(_main, false);`;
+    await fs.writeFile(path.join(tmpDir, 'main.gs'), VALID_GS_CONTENT, 'utf-8');
+    await fs.writeFile(path.join(tmpDir, 'updated.gs'), updatedGs, 'utf-8');
+    await fs.writeFile(path.join(tmpDir, 'newfile.gs'), VALID_GS_CONTENT, 'utf-8');
+    const fileOps = {
+      getProjectFiles: sinon.stub().resolves([
+        { name: 'main', source: VALID_GS_CONTENT, type: 'SERVER_JS' },
+        { name: 'updated', source: VALID_GS_CONTENT, type: 'SERVER_JS' }, // old → will be toUpdate
+        { name: 'ghost', source: VALID_GS_CONTENT, type: 'SERVER_JS' },  // remote-only → toPreserve
+      ]),
+      updateProjectFiles: sinon.stub().resolves([]),
+    } as unknown as GASFileOperations;
+
+    const result = await handlePushTool(
+      { scriptId: VALID_SCRIPT_ID, localDir: tmpDir, action: 'preview' },
+      fileOps,
+    );
+
+    assert.equal(result.success, true, `expected success, got: ${result.error}`);
+    assert.ok(result.preview, 'preview must be present');
+    assert.ok(result.preview.toAdd.includes('newfile'), `toAdd: ${result.preview.toAdd}`);
+    assert.ok(result.preview.toUpdate.includes('updated'), `toUpdate: ${result.preview.toUpdate}`);
+    assert.ok(result.preview.toPreserve.includes('ghost'), `toPreserve: ${result.preview.toPreserve}`);
+    assert.equal(result.preview.toPrune.length, 0, 'toPrune empty when prune=false');
+  });
+
+  it('action=preview does NOT call updateProjectFiles', async () => {
+    await fs.writeFile(path.join(tmpDir, 'main.gs'), VALID_GS_CONTENT, 'utf-8');
+    const fileOps = {
+      getProjectFiles: sinon.stub().resolves([]),
+      updateProjectFiles: sinon.stub().resolves([]),
+    } as unknown as GASFileOperations;
+
+    await handlePushTool(
+      { scriptId: VALID_SCRIPT_ID, localDir: tmpDir, action: 'preview' },
+      fileOps,
+    );
+
+    assert.equal(
+      (fileOps.updateProjectFiles as sinon.SinonStub).callCount,
+      0,
+      'updateProjectFiles must not be called for action=preview',
+    );
+  });
+
+  it('action=preview hint mentions relevant counts (add/update)', async () => {
+    const updatedGs = `function _main() { exports.fn = function() { return 99; }; }\n__defineModule__(_main, false);`;
+    await fs.writeFile(path.join(tmpDir, 'main.gs'), VALID_GS_CONTENT, 'utf-8');
+    await fs.writeFile(path.join(tmpDir, 'updated.gs'), updatedGs, 'utf-8');
+    const fileOps = {
+      getProjectFiles: sinon.stub().resolves([
+        { name: 'updated', source: VALID_GS_CONTENT, type: 'SERVER_JS' },
+      ]),
+      updateProjectFiles: sinon.stub().resolves([]),
+    } as unknown as GASFileOperations;
+
+    const result = await handlePushTool(
+      { scriptId: VALID_SCRIPT_ID, localDir: tmpDir, action: 'preview' },
+      fileOps,
+    );
+
+    assert.ok(result.hints.next, 'hints.next should be set');
+    // main is new (toAdd), updated is modified (toUpdate)
+    assert.ok(
+      result.hints.next.includes('add') || result.hints.next.includes('update'),
+      `hint should mention add or update, got: ${result.hints.next}`,
+    );
+  });
+
+  it('action=preview when remote fetch fails: success=false with error', async () => {
+    await fs.writeFile(path.join(tmpDir, 'main.gs'), VALID_GS_CONTENT, 'utf-8');
+    const fileOps = {
+      getProjectFiles: sinon.stub().rejects(new Error('network error')),
+      updateProjectFiles: sinon.stub().resolves([]),
+    } as unknown as GASFileOperations;
+
+    const result = await handlePushTool(
+      { scriptId: VALID_SCRIPT_ID, localDir: tmpDir, action: 'preview' },
+      fileOps,
+    );
+
+    assert.equal(result.success, false, 'should fail when remote fetch fails');
+    assert.ok(result.error, 'error should be set');
+  });
+});

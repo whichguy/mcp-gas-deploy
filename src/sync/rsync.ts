@@ -39,6 +39,15 @@ export interface PushResult {
   mergeSkipped?: boolean;
   gitArchived?: boolean;
   archivedFiles?: string[];
+  preview?: PushPreviewResult;
+}
+
+export interface PushPreviewResult {
+  toAdd: string[];          // localOnly — would be added on remote
+  toUpdate: string[];       // modified — remote content would change
+  toPreserve: string[];     // remoteOnly, kept in merge mode (prune=false)
+  toPrune: string[];        // remoteOnly, removed when prune=true
+  totalFilesAfterPush: number;
 }
 
 interface GitArchiveResult {
@@ -238,6 +247,69 @@ async function readLocalFiles(
   }
 
   return files;
+}
+
+/**
+ * Compute a structured diff of what push would do without making any changes.
+ * Uses hashContent() for content comparison (normalizes CRLF to prevent spurious diffs).
+ */
+function computePreview(
+  localFiles: Map<string, { source: string; type: GASFile['type']; filename: string }>,
+  remoteFiles: GASFile[],
+  prune: boolean
+): PushPreviewResult {
+  const remoteByName = new Map(remoteFiles.map(f => [f.name, f]));
+  const localNameSet = new Set(localFiles.keys());
+
+  const toAdd: string[] = [];
+  const toUpdate: string[] = [];
+  for (const [name, local] of localFiles) {
+    if (!remoteByName.has(name)) {
+      toAdd.push(name);
+    } else {
+      const remote = remoteByName.get(name)!;
+      if (hashContent(local.source) !== hashContent(remote.source ?? '')) {
+        toUpdate.push(name);
+      }
+    }
+  }
+
+  const toPreserve: string[] = [];
+  const toPrune: string[] = [];
+  for (const remote of remoteFiles) {
+    if (!localNameSet.has(remote.name)) {
+      if (prune) {
+        toPrune.push(remote.name);
+      } else {
+        toPreserve.push(remote.name);
+      }
+    }
+  }
+
+  const totalFilesAfterPush = localFiles.size + (prune ? 0 : toPreserve.length);
+  return { toAdd, toUpdate, toPreserve, toPrune, totalFilesAfterPush };
+}
+
+/** Write .clasp.json and ensure .gitignore lists it. Non-fatal — errors do not fail the push. */
+async function ensureClaspFiles(localDir: string, scriptId: string): Promise<void> {
+  try {
+    await fs.writeFile(
+      path.join(localDir, '.clasp.json'),
+      JSON.stringify({ scriptId }, null, 2) + '\n',
+      'utf-8'
+    );
+  } catch { /* non-fatal */ }
+
+  try {
+    const gitignorePath = path.join(localDir, '.gitignore');
+    let content = '';
+    try { content = await fs.readFile(gitignorePath, 'utf-8'); } catch { /* ENOENT — will create */ }
+    const lines = content.split('\n').map(l => l.trim());
+    if (!lines.includes('.clasp.json')) {
+      const suffix = content.length > 0 && !content.endsWith('\n') ? '\n' : '';
+      await fs.writeFile(gitignorePath, content + suffix + '.clasp.json\n', 'utf-8');
+    }
+  } catch { /* non-fatal */ }
 }
 
 // --- Git archive ---
@@ -521,7 +593,8 @@ export async function push(
       const orderedFiles = orderFilesForPush(fileSet, remoteFiles);
 
       if (options.dryRun) {
-        return { success: true, filesPushed: allLocalNames, mergeSkipped, gitArchived, archivedFiles };
+        const preview = computePreview(localFiles, remoteFiles, options.prune ?? false);
+        return { success: true, filesPushed: allLocalNames, mergeSkipped, gitArchived, archivedFiles, preview };
       }
 
       // Validate using ordered positions so REQUIRE_POSITION reflects the actual push sequence.
@@ -545,6 +618,7 @@ export async function push(
       }
 
       await fileOps.updateProjectFiles(scriptId, orderedFiles);
+      await ensureClaspFiles(localDir, scriptId);
 
       return { success: true, filesPushed: allLocalNames, mergeSkipped, gitArchived, archivedFiles };
     } catch (error: unknown) {

@@ -1095,3 +1095,226 @@ describe('status integration after sync', () => {
     assert.ok(localOnlyNames.includes('local-only'));
   });
 });
+
+// --- push preview (dryRun) ---
+
+describe('push preview (dryRun)', () => {
+  const SCRIPT_ID = 'previewTestId123456789';
+  const validGs = `function _main() { exports.fn = function() {}; }\n__defineModule__(_main, false);`;
+  const updatedGs = `function _main() { exports.fn = function() { return 42; }; }\n__defineModule__(_main, false);`;
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'rsync-preview-'));
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+    sinon.restore();
+  });
+
+  it('dryRun=true returns preview with correct buckets (toAdd/toUpdate/toPreserve/toPrune)', async () => {
+    // local: main (same), updated (modified), newfile (add)
+    // remote: main (same), updated (old), ghost (remoteOnly)
+    await fs.writeFile(path.join(tmpDir, 'main.gs'), validGs, 'utf-8');
+    await fs.writeFile(path.join(tmpDir, 'updated.gs'), updatedGs, 'utf-8');
+    await fs.writeFile(path.join(tmpDir, 'newfile.gs'), validGs, 'utf-8');
+    const fileOps = makeFileOps([
+      gasFile('main', validGs),
+      gasFile('updated', validGs), // old content — will be modified
+      gasFile('ghost', validGs),   // remote-only
+    ]);
+
+    const result = await push(SCRIPT_ID, tmpDir, fileOps, { dryRun: true, skipValidation: true });
+
+    assert.equal(result.success, true);
+    assert.ok(result.preview, 'preview must be set on dryRun');
+    assert.ok(result.preview.toAdd.includes('newfile'), `toAdd: ${result.preview.toAdd}`);
+    assert.ok(result.preview.toUpdate.includes('updated'), `toUpdate: ${result.preview.toUpdate}`);
+    assert.ok(result.preview.toPreserve.includes('ghost'), `toPreserve: ${result.preview.toPreserve}`);
+    assert.equal(result.preview.toPrune.length, 0, 'toPrune should be empty when prune=false');
+    assert.ok(!result.preview.toAdd.includes('main'), 'unchanged file should not be in toAdd');
+    assert.ok(!result.preview.toUpdate.includes('main'), 'unchanged file should not be in toUpdate');
+  });
+
+  it('dryRun=true with prune=true: remote-only files appear in toPrune, not toPreserve', async () => {
+    await fs.writeFile(path.join(tmpDir, 'main.gs'), validGs, 'utf-8');
+    const fileOps = makeFileOps([
+      gasFile('main', validGs),
+      gasFile('ghost', validGs),
+    ]);
+
+    const result = await push(SCRIPT_ID, tmpDir, fileOps, { dryRun: true, prune: true, skipValidation: true });
+
+    assert.equal(result.success, true);
+    assert.ok(result.preview, 'preview must be set');
+    assert.ok(result.preview.toPrune.includes('ghost'), `toPrune: ${result.preview.toPrune}`);
+    assert.equal(result.preview.toPreserve.length, 0, 'toPreserve should be empty when prune=true');
+  });
+
+  it('dryRun=true with prune=false: remote-only files appear in toPreserve, not toPrune', async () => {
+    await fs.writeFile(path.join(tmpDir, 'main.gs'), validGs, 'utf-8');
+    const fileOps = makeFileOps([
+      gasFile('main', validGs),
+      gasFile('ghost', validGs),
+    ]);
+
+    const result = await push(SCRIPT_ID, tmpDir, fileOps, { dryRun: true, prune: false, skipValidation: true });
+
+    assert.equal(result.success, true);
+    assert.ok(result.preview, 'preview must be set');
+    assert.ok(result.preview.toPreserve.includes('ghost'), `toPreserve: ${result.preview.toPreserve}`);
+    assert.equal(result.preview.toPrune.length, 0, 'toPrune should be empty when prune=false');
+  });
+
+  it('totalFilesAfterPush is correct in merge mode (prune=false)', async () => {
+    // 2 local + 1 remoteOnly (preserved) = 3 total
+    await fs.writeFile(path.join(tmpDir, 'a.gs'), validGs, 'utf-8');
+    await fs.writeFile(path.join(tmpDir, 'b.gs'), validGs, 'utf-8');
+    const fileOps = makeFileOps([
+      gasFile('a', validGs),
+      gasFile('ghost', validGs),
+    ]);
+
+    const result = await push(SCRIPT_ID, tmpDir, fileOps, { dryRun: true, prune: false, skipValidation: true });
+
+    assert.ok(result.preview, 'preview must be set');
+    assert.equal(result.preview.totalFilesAfterPush, 3, 'local(2) + preserved(1) = 3');
+  });
+
+  it('totalFilesAfterPush is correct in prune mode (prune=true)', async () => {
+    // 2 local + 1 remoteOnly (pruned, not counted) = 2 total
+    await fs.writeFile(path.join(tmpDir, 'a.gs'), validGs, 'utf-8');
+    await fs.writeFile(path.join(tmpDir, 'b.gs'), validGs, 'utf-8');
+    const fileOps = makeFileOps([
+      gasFile('a', validGs),
+      gasFile('ghost', validGs),
+    ]);
+
+    const result = await push(SCRIPT_ID, tmpDir, fileOps, { dryRun: true, prune: true, skipValidation: true });
+
+    assert.ok(result.preview, 'preview must be set');
+    assert.equal(result.preview.totalFilesAfterPush, 2, 'local(2) only when prune=true');
+  });
+
+  it('dryRun=true does NOT call updateProjectFiles', async () => {
+    await fs.writeFile(path.join(tmpDir, 'main.gs'), validGs, 'utf-8');
+    const fileOps = makeFileOps([gasFile('main', validGs)]);
+
+    await push(SCRIPT_ID, tmpDir, fileOps, { dryRun: true, skipValidation: true });
+
+    assert.equal(
+      (fileOps.updateProjectFiles as sinon.SinonStub).callCount,
+      0,
+      'updateProjectFiles must not be called in dryRun',
+    );
+  });
+
+  it('dryRun=true when mergeSkipped: preview is set with empty remote buckets', async () => {
+    await fs.writeFile(path.join(tmpDir, 'main.gs'), validGs, 'utf-8');
+    const fileOps = {
+      getProjectFiles: sinon.stub().rejects(new Error('network error')),
+      updateProjectFiles: sinon.stub().resolves([]),
+    } as unknown as GASFileOperations;
+
+    const result = await push(SCRIPT_ID, tmpDir, fileOps, { dryRun: true, skipValidation: true });
+
+    assert.equal(result.success, true);
+    assert.ok(result.mergeSkipped, 'mergeSkipped should be true');
+    assert.ok(result.preview, 'preview must be set even when mergeSkipped');
+    // With no remote data, remote buckets are empty
+    assert.equal(result.preview.toPreserve.length, 0, 'no remote files to preserve');
+    assert.equal(result.preview.toPrune.length, 0, 'no remote files to prune');
+    // Local file is in toAdd (not found on remote)
+    assert.ok(result.preview.toAdd.includes('main'), `toAdd should include main: ${result.preview.toAdd}`);
+  });
+});
+
+// --- ensureClaspFiles (via successful push) ---
+
+describe('ensureClaspFiles (via push)', () => {
+  const SCRIPT_ID = 'claspTestId123456789x';
+  const validGs = `function _main() { exports.fn = function() {}; }\n__defineModule__(_main, false);`;
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    const base = path.join(os.homedir(), '.cache', 'mcp-gas-deploy-test');
+    await fs.mkdir(base, { recursive: true });
+    tmpDir = await fs.mkdtemp(path.join(base, 'clasp-'));
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+    sinon.restore();
+  });
+
+  it('.clasp.json written with correct scriptId after successful push', async () => {
+    await fs.writeFile(path.join(tmpDir, 'main.gs'), validGs, 'utf-8');
+    const fileOps = makeFileOps([]);
+
+    const result = await push(SCRIPT_ID, tmpDir, fileOps, { skipValidation: true });
+
+    assert.equal(result.success, true);
+    const claspJson = JSON.parse(await fs.readFile(path.join(tmpDir, '.clasp.json'), 'utf-8'));
+    assert.equal(claspJson.scriptId, SCRIPT_ID);
+  });
+
+  it('.clasp.json NOT written on dryRun push', async () => {
+    await fs.writeFile(path.join(tmpDir, 'main.gs'), validGs, 'utf-8');
+    const fileOps = makeFileOps([]);
+
+    await push(SCRIPT_ID, tmpDir, fileOps, { dryRun: true, skipValidation: true });
+
+    await assert.rejects(
+      () => fs.readFile(path.join(tmpDir, '.clasp.json'), 'utf-8'),
+      { code: 'ENOENT' },
+      '.clasp.json must not be written on dryRun',
+    );
+  });
+
+  it('.gitignore created with .clasp.json entry when absent', async () => {
+    await fs.writeFile(path.join(tmpDir, 'main.gs'), validGs, 'utf-8');
+    const fileOps = makeFileOps([]);
+
+    await push(SCRIPT_ID, tmpDir, fileOps, { skipValidation: true });
+
+    const content = await fs.readFile(path.join(tmpDir, '.gitignore'), 'utf-8');
+    assert.ok(content.split('\n').map(l => l.trim()).includes('.clasp.json'), `.gitignore should list .clasp.json; got:\n${content}`);
+  });
+
+  it('.gitignore has .clasp.json appended when existing file lacks it', async () => {
+    await fs.writeFile(path.join(tmpDir, 'main.gs'), validGs, 'utf-8');
+    await fs.writeFile(path.join(tmpDir, '.gitignore'), 'node_modules\n', 'utf-8');
+    const fileOps = makeFileOps([]);
+
+    await push(SCRIPT_ID, tmpDir, fileOps, { skipValidation: true });
+
+    const content = await fs.readFile(path.join(tmpDir, '.gitignore'), 'utf-8');
+    const lines = content.split('\n').map(l => l.trim());
+    assert.ok(lines.includes('node_modules'), 'existing entry preserved');
+    assert.ok(lines.includes('.clasp.json'), '.clasp.json appended');
+  });
+
+  it('.gitignore not modified when .clasp.json already listed', async () => {
+    await fs.writeFile(path.join(tmpDir, 'main.gs'), validGs, 'utf-8');
+    await fs.writeFile(path.join(tmpDir, '.gitignore'), 'node_modules\n.clasp.json\n', 'utf-8');
+    const fileOps = makeFileOps([]);
+
+    await push(SCRIPT_ID, tmpDir, fileOps, { skipValidation: true });
+
+    const content = await fs.readFile(path.join(tmpDir, '.gitignore'), 'utf-8');
+    const occurrences = content.split('\n').filter(l => l.trim() === '.clasp.json').length;
+    assert.equal(occurrences, 1, '.clasp.json must not be duplicated');
+  });
+
+  it('failure to write .clasp.json does not fail the push', async () => {
+    await fs.writeFile(path.join(tmpDir, 'main.gs'), validGs, 'utf-8');
+    // Create .clasp.json as a directory so writeFile fails
+    await fs.mkdir(path.join(tmpDir, '.clasp.json'));
+    const fileOps = makeFileOps([]);
+
+    const result = await push(SCRIPT_ID, tmpDir, fileOps, { skipValidation: true });
+
+    assert.equal(result.success, true, 'push must succeed even if .clasp.json write fails');
+  });
+});

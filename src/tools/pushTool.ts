@@ -15,6 +15,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { GASFileOperations } from '../api/gasFileOperations.js';
 import { push } from '../sync/rsync.js';
+import type { PushPreviewResult } from '../sync/rsync.js';
 import { SCRIPT_ID_PATTERN } from '../utils/validation.js';
 
 export interface PushToolParams {
@@ -23,6 +24,7 @@ export interface PushToolParams {
   dryRun?: boolean;
   skipValidation?: boolean;
   prune?: boolean;
+  action?: 'push' | 'preview';
 }
 
 export interface PushToolResult {
@@ -39,6 +41,7 @@ export interface PushToolResult {
   }>;
   error?: string;
   hints: Record<string, string>;
+  preview?: PushPreviewResult & { prune: boolean };
 }
 
 export const PUSH_TOOL_DEFINITION = {
@@ -76,10 +79,50 @@ skipValidation=true: ONLY for system shim files (require.gs, __mcp_exec.gs).`,
         type: 'boolean',
         description: 'Remove remote-only files from GAS (files on remote not present locally). Default false (safe: preserves remote-only files). Pass true to explicitly delete ghost files.',
       },
+      action: {
+        type: 'string',
+        enum: ['push', 'preview'],
+        description: "'push' (default): validate and push files. 'preview': show structured diff without pushing.",
+      },
     },
     required: ['scriptId'],
   },
 };
+
+async function handlePreviewAction(
+  params: PushToolParams,
+  fileOps: GASFileOperations,
+  resolvedDir: string
+): Promise<PushToolResult> {
+  const { scriptId, skipValidation, prune } = params;
+  const result = await push(scriptId, resolvedDir, fileOps, { dryRun: true, skipValidation, prune });
+
+  if (!result.preview || result.mergeSkipped) {
+    return {
+      success: false,
+      filesPushed: [],
+      error: 'Preview unavailable — remote fetch failed',
+      hints: { fix: 'Check authentication and that the project exists, then retry.' },
+    };
+  }
+
+  const { toAdd, toUpdate, toPreserve, toPrune, totalFilesAfterPush } = result.preview;
+  const parts: string[] = [];
+  if (toAdd.length > 0) parts.push(`${toAdd.length} add`);
+  if (toUpdate.length > 0) parts.push(`${toUpdate.length} update`);
+  if (toPreserve.length > 0) parts.push(`${toPreserve.length} preserve`);
+  if (toPrune.length > 0) parts.push(`${toPrune.length} prune`);
+  const summary = parts.length > 0 ? parts.join(', ') : 'no changes';
+
+  return {
+    success: true,
+    filesPushed: [],
+    preview: { toAdd, toUpdate, toPreserve, toPrune, totalFilesAfterPush, prune: prune ?? false },
+    hints: {
+      next: `preview: ${summary}. Run push to apply changes.`,
+    },
+  };
+}
 
 export async function handlePushTool(
   params: PushToolParams,
@@ -107,6 +150,11 @@ export async function handlePushTool(
       error: 'localDir must resolve within your home directory',
       hints: { fix: 'Use an absolute path within your home directory or omit localDir' },
     };
+  }
+
+  const action = params.action ?? 'push';
+  if (action === 'preview') {
+    return handlePreviewAction(params, fileOps, resolvedDir);
   }
 
   const result = await push(scriptId, resolvedDir, fileOps, { dryRun, skipValidation, prune });
