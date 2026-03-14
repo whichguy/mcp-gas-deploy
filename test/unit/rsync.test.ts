@@ -404,6 +404,24 @@ describe('orderFilesForPush', () => {
       `Files should be grouped by folder, got: ${names}`);
   });
 
+  it('root-level new files append after folder-prefixed new files', () => {
+    const fileSet: GASFile[] = [
+      gasFile('common-js/foo'), gasFile('utils/bar'), gasFile('rootHelper'), gasFile('anotherRoot'),
+    ];
+    const remote: GASFile[] = [];
+
+    const result = orderFilesForPush(fileSet, remote);
+
+    const names = result.map(f => f.name);
+    const folderPrefixedIndices = names.filter(n => n.includes('/')).map(n => names.indexOf(n));
+    const rootIndices = names.filter(n => !n.includes('/')).map(n => names.indexOf(n));
+    assert.ok(Math.max(...folderPrefixedIndices) < Math.min(...rootIndices),
+      `Root-level files should come after folder-prefixed files, got: ${names}`);
+    // Root-level files preserve insertion order
+    assert.equal(names.indexOf('rootHelper'), names.indexOf('anotherRoot') - 1,
+      `Root-level files should preserve insertion order, got: ${names}`);
+  });
+
   it('appsscript manifest always last', () => {
     const fileSet: GASFile[] = [
       { name: 'appsscript', source: '{}', type: 'JSON' },
