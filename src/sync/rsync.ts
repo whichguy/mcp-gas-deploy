@@ -181,9 +181,12 @@ export function orderFilesForPush(fileSet: GASFile[], remoteFiles: GASFile[]): G
     const bCommonJsPriority = getCommonJsPriority(b.name);
     if (aCommonJsPriority !== bCommonJsPriority) return aCommonJsPriority - bCommonJsPriority;
 
-    // Tier 2: group by folder
+    // Tier 2: group by folder — root-level (no folder prefix) appended after folder-prefixed files
     const aFolder = getFolderFromName(a.name);
     const bFolder = getFolderFromName(b.name);
+    const aHasFolder = aFolder !== '';
+    const bHasFolder = bFolder !== '';
+    if (aHasFolder !== bHasFolder) return aHasFolder ? -1 : 1;
     if (aFolder !== bFolder) return aFolder < bFolder ? -1 : 1;
 
     // Tier 3: stable — preserve insertion order
