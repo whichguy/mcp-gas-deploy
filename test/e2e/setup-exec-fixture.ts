@@ -46,6 +46,17 @@ async function main() {
     process.exit(1);
   }
 
+  // Pre-check: runtime files must exist before creating/touching any GAS project
+  for (const runtimeFile of [REQUIRE_GS, MCP_EXEC_GS]) {
+    try {
+      await fs.access(runtimeFile);
+    } catch {
+      console.error(`ERROR: Runtime file not found: ${runtimeFile}`);
+      console.error('Ensure mcp_gas is checked out at ~/src/mcp_gas before running setup.');
+      process.exit(1);
+    }
+  }
+
   const authOps = new GASAuthOperations(sessionManager);
   const fileOps = new GASFileOperations(authOps);
   const deployOps = new GASDeployOperations(authOps);
