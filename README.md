@@ -61,7 +61,7 @@ The server requests these scopes automatically during login:
 | `ls` | List files in a GAS project (metadata only) | `scriptId`, `path?`, `type?` |
 | `pull` | Download GAS project files to local directory | `scriptId`, `targetDir?` |
 | `status` | Compare local vs remote by content hash | `scriptId`, `localDir?` |
-| `push` | Push local files to GAS with CommonJS validation | `scriptId`, `prune?`, `skipValidation?` |
+| `push` | Push local files to GAS with CommonJS validation | `scriptId`, `action?` (`push`\|`preview`), `prune?`, `skipValidation?` |
 | `exec` | Execute a GAS function (auto-pushes first) | `scriptId`, `function`, `module?`, `args?` |
 | `deploy` | Deploy / rollback / promote / list-versions | `scriptId`, `action` |
 | `projects` | List or search standalone GAS projects | `action`, `query?` |
@@ -73,10 +73,11 @@ The server requests these scopes automatically during login:
 2. `projects list` — find your script ID
 3. `pull` — download project files locally
 4. Edit `.gs` files in your editor
-5. `push` — sync back to GAS (validates CommonJS structure)
-6. `exec` — run a function remotely
-7. `deploy action=deploy` — create a versioned staging deployment
-8. `deploy action=promote` — promote staging to production
+5. `push action=preview` — show what would change (add/update/preserve/prune) without modifying GAS
+6. `push` — sync back to GAS (validates CommonJS structure; writes `.clasp.json` and updates `.gitignore` automatically)
+7. `exec` — run a function remotely
+8. `deploy action=deploy` — create a versioned staging deployment
+9. `deploy action=promote` — promote staging to production
 
 ## Architecture
 
@@ -100,6 +101,22 @@ Deployments use a **4-slot circular buffer** per environment (staging and produc
 - **`list-versions`** shows all version snapshots with descriptions.
 
 All deployment state is tracked in `gas-deploy.json`, which is written only after the GAS API call succeeds.
+
+## Push Side-Effects
+
+Every successful `push` (non-dryRun) automatically:
+
+- Writes **`.clasp.json`** with the project's `scriptId` (for clasp CLI compatibility).
+- Ensures **`.gitignore`** lists `.clasp.json` (creates the file if absent; appends if not listed).
+
+Both files start with `.` so `readLocalFiles()` skips them — they are never pushed to GAS.
+
+**Deleted-file recovery:** Before any remote-only file can be lost during a push, `gitArchiveRemoteOnly()` uses a two-commit git pattern — writes the file to disk, commits it, deletes it, commits the removal. Deleted files are fully recoverable:
+
+```bash
+git log --diff-filter=A -- <filename>   # find the archive commit
+git checkout <hash> -- <filename>        # restore the file
+```
 
 ## Testing
 
