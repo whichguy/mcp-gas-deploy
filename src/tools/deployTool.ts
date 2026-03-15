@@ -25,6 +25,8 @@ import {
 import { SCRIPT_ID_PATTERN } from '../utils/validation.js';
 import { generateShimCode, validateUserSymbol, buildConsumerManifest } from '../utils/consumerShim.js';
 import { buildHintContext } from '../utils/hintContext.js';
+import { SchemaFragments } from '../utils/schemaFragments.js';
+import { GuidanceFragments } from '../utils/guidanceFragments.js';
 
 /** Default web app manifest config — applied when deploying a project with no webapp section. */
 const DEFAULT_WEBAPP_CONFIG = {
@@ -100,25 +102,19 @@ export interface DeployToolResult {
 
 export const DEPLOY_TOOL_DEFINITION = {
   name: 'deploy',
-  description: `Manage GAS versioned deployments.
-
-action=deploy (default): Push files and create a versioned web app deployment to staging. Maintains a 4-slot circular buffer for rollback history.
-action=list-versions: List all version snapshots and remaining budget (cap: 200 per project).
-action=rollback: Revert staging or prod deployment one step back in the circular buffer (instant, no file push). Use to=staging or to=prod.
-action=promote: Promote staging to prod — re-points the prod deployment to the current staging version. Always staging→prod.
-
-Pre-deploy: validates CommonJS, pushes all local files. Stores deployment URL for exec.`,
+  description: '[DEPLOY] Manage GAS versioned deployments — deploy to staging, rollback, promote to prod, list versions. WHEN: releasing code, reverting bad deploys, promoting staging. AVOID: use status to check current state first. Example: deploy({scriptId: "1abc...", action: "deploy"})',
+  annotations: {
+    title: 'Deploy & Version Management',
+    readOnlyHint: false,
+    destructiveHint: true,
+    idempotentHint: false,
+    openWorldHint: true,
+  },
   inputSchema: {
     type: 'object' as const,
     properties: {
-      scriptId: {
-        type: 'string',
-        description: 'Google Apps Script project ID',
-      },
-      localDir: {
-        type: 'string',
-        description: 'Local directory with .gs files (default: ~/gas-projects/<scriptId>)',
-      },
+      ...SchemaFragments.scriptId,
+      ...SchemaFragments.localDir,
       action: {
         type: 'string',
         enum: ['deploy', 'list-versions', 'rollback', 'promote'],
@@ -135,6 +131,41 @@ Pre-deploy: validates CommonJS, pushes all local files. Stores deployment URL fo
       },
     },
     required: ['scriptId'],
+    additionalProperties: false,
+    llmGuidance: {
+      circularBuffer: GuidanceFragments.circularBuffer,
+      workflow: GuidanceFragments.deployWorkflow,
+      rollback: 'action=rollback to="staging"|"prod" — steps back one slot in the circular buffer. Instant, no file push. Stops at oldest slot.',
+      promote: 'action=promote — always staging→prod. Re-points prod deployment to current staging version.',
+      versionLimit: 'GAS allows max 200 versions per project. Use list-versions to check budget.',
+      consumer: 'Consumer shim auto-updates when userSymbol + consumerScriptId are configured in gas-deploy.json. Consumer failures are non-fatal.',
+      errorRecovery: GuidanceFragments.errorRecovery,
+    },
+  },
+  outputSchema: {
+    type: 'object' as const,
+    properties: {
+      success: { type: 'boolean' },
+      action: { type: 'string' },
+      environment: { type: 'string' },
+      versionNumber: { type: 'number' },
+      previousVersionNumber: { type: 'number' },
+      deploymentId: { type: 'string' },
+      webAppUrl: { type: 'string' },
+      versions: { type: 'array' },
+      versionBudget: {
+        type: 'object',
+        properties: {
+          used: { type: 'number' },
+          remaining: { type: 'number' },
+          limit: { type: 'number' },
+        },
+      },
+      consumerUpdate: { type: 'object' },
+      error: { type: 'string' },
+      hints: { type: 'object', additionalProperties: { type: 'string' } },
+    },
+    required: ['success', 'action'],
   },
 };
 

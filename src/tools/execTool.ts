@@ -19,6 +19,8 @@ import { SessionManager } from '../auth/sessionManager.js';
 import { SCRIPT_ID_PATTERN, FUNCTION_PATTERN, MODULE_NAME_PATTERN } from '../utils/validation.js';
 import { executeRawJs } from '../utils/gasExecutor.js';
 import type { ValidationResult } from '../validation/commonjsValidator.js';
+import { SchemaFragments } from '../utils/schemaFragments.js';
+import { GuidanceFragments } from '../utils/guidanceFragments.js';
 
 export interface ExecToolParams {
   scriptId: string;
@@ -40,24 +42,19 @@ export interface ExecToolResult {
 
 export const EXEC_TOOL_DEFINITION = {
   name: 'exec',
-  description: `Execute a GAS function. Auto-pushes all local files first (with CommonJS validation).
-
-Requirements:
-- Web app deployment must exist — run deploy first if none.
-- Function must be exported inside _main(): exports.myFn = function() { ... }
-- module param: use "common-js/<name>" (e.g. "common-js/utils") to target a module directly.
-  Omit module to route via runner-api (default runner module).`,
+  description: '[EXEC] Execute a GAS function via web app URL — auto-pushes local files first. WHEN: testing a function, verifying deployed behavior. AVOID: run deploy first if no web app URL exists. Example: exec({scriptId: "1abc...", function: "myFn", args: []})',
+  annotations: {
+    title: 'Execute GAS Function',
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: false,
+    openWorldHint: true,
+  },
   inputSchema: {
     type: 'object' as const,
     properties: {
-      scriptId: {
-        type: 'string',
-        description: 'Google Apps Script project ID',
-      },
-      localDir: {
-        type: 'string',
-        description: 'Local directory with .gs files (default: ~/gas-projects/<scriptId>)',
-      },
+      ...SchemaFragments.scriptId,
+      ...SchemaFragments.localDir,
       module: {
         type: 'string',
         description: 'Module path, e.g. "common-js/utils". Calls require(module)[function](...args). Omit to route via runner-api.',
@@ -73,6 +70,27 @@ Requirements:
       },
     },
     required: ['scriptId', 'function'],
+    additionalProperties: false,
+    llmGuidance: {
+      requirements: 'Web app deployment must exist — run deploy first if none. Function must be exported inside _main(): exports.myFn = function() { ... }',
+      module: 'Use "common-js/<name>" (e.g. "common-js/utils") to call a module function directly. Omit to route via runner-api (default).',
+      autoPush: 'All local files are pushed before execution (with CommonJS validation). Fix validation errors before retrying.',
+      browserAuth: 'If exec returns a browser authorization error, open the HEAD deployment URL in Chrome signed in as the script owner, then retry.',
+      errorRecovery: GuidanceFragments.errorRecovery,
+    },
+  },
+  outputSchema: {
+    type: 'object' as const,
+    properties: {
+      success: { type: 'boolean' },
+      result: {},
+      logs: { type: 'string' },
+      filesSync: { type: 'number' },
+      validationErrors: { type: 'array' },
+      error: { type: 'string' },
+      hints: { type: 'object', additionalProperties: { type: 'string' } },
+    },
+    required: ['success'],
   },
 };
 

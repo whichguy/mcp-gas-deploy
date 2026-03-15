@@ -11,6 +11,8 @@ import { GASFileOperations } from '../api/gasFileOperations.js';
 import { getStatus, type SyncStatus } from '../sync/rsync.js';
 import { SCRIPT_ID_PATTERN } from '../utils/validation.js';
 import { getDeploymentInfo, type DeploymentInfo, STALE_THRESHOLD_MS } from '../config/deployConfig.js';
+import { SchemaFragments } from '../utils/schemaFragments.js';
+import { GuidanceFragments } from '../utils/guidanceFragments.js';
 
 function buildStalenessHints(
   info: DeploymentInfo | undefined,
@@ -84,21 +86,49 @@ export interface StatusToolResult {
 
 export const STATUS_TOOL_DEFINITION = {
   name: 'status',
-  description: `Read-only: compare local .gs files vs remote GAS project by name and content hash. Shows inSync, modified, localOnly, remoteOnly counts. push and exec always push all local files.`,
-  annotations: { readOnlyHint: true },
+  description: '[SYNC:STATUS] Compare local vs remote files and show deployment URLs. WHEN: before push/deploy, checking deployment health, finding URLs. AVOID: use ls for file metadata without sync comparison. Example: status({scriptId: "1abc..."})',
+  annotations: {
+    title: 'Sync & Deploy Status',
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: true,
+  },
   inputSchema: {
     type: 'object' as const,
     properties: {
-      scriptId: {
-        type: 'string',
-        description: 'Google Apps Script project ID',
-      },
-      localDir: {
-        type: 'string',
-        description: 'Local directory to compare (default: ~/gas-projects/<scriptId>)',
-      },
+      ...SchemaFragments.scriptId,
+      ...SchemaFragments.localDir,
     },
     required: ['scriptId'],
+    additionalProperties: false,
+    llmGuidance: {
+      deploymentUrls: 'Response includes head (dev), staging, and prod URLs when gas-deploy.json exists. Use these URLs for browser testing.',
+      staleness: 'Staleness hints appear when prod is behind staging or local changes are pending. Follow the suggested action.',
+      circularBuffer: GuidanceFragments.circularBuffer,
+      errorRecovery: GuidanceFragments.errorRecovery,
+    },
+  },
+  outputSchema: {
+    type: 'object' as const,
+    properties: {
+      success: { type: 'boolean' },
+      status: { type: 'object' },
+      summary: { type: 'string' },
+      deployments: {
+        type: 'object',
+        properties: {
+          head: { type: 'object' },
+          staging: { type: 'object' },
+          prod: { type: 'object' },
+          stagingSlots: { type: 'array' },
+          prodSlots: { type: 'array' },
+        },
+      },
+      error: { type: 'string' },
+      hints: { type: 'object', additionalProperties: { type: 'string' } },
+    },
+    required: ['success', 'summary'],
   },
 };
 

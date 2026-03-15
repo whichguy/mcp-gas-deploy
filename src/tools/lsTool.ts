@@ -8,6 +8,7 @@
 
 import type { GASFileOperations } from '../api/gasFileOperations.js';
 import { SCRIPT_ID_PATTERN } from '../utils/validation.js';
+import { SchemaFragments } from '../utils/schemaFragments.js';
 
 export interface LsToolParams {
   scriptId: string;
@@ -35,23 +36,18 @@ export interface LsToolResult {
 
 export const LS_TOOL_DEFINITION = {
   name: 'ls',
-  description: `List files in a Google Apps Script project (metadata only — no source content).
-
-Returns file names, types, sizes, positions, timestamps, and function signatures. Source code is omitted to keep responses small — use pull to download files locally.
-
-Optional filters:
-- path: filter files by name. Plain substring match by default; treated as regex if the value contains regex metacharacters (^$.*+?()[]{}|\\). Max 200 characters.
-- type: filter by file type (SERVER_JS, HTML, or JSON).
-
-Files are sorted by position (GAS execution order), which matters for CommonJS module loading.`,
-  annotations: { readOnlyHint: true },
+  description: '[PROJECT:READ] List GAS project files (metadata only, no source). WHEN: exploring project structure or checking file order. AVOID: use pull to download source. Example: ls({scriptId: "1abc..."})',
+  annotations: {
+    title: 'List Project Files',
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: true,
+  },
   inputSchema: {
     type: 'object' as const,
     properties: {
-      scriptId: {
-        type: 'string',
-        description: 'Google Apps Script project ID',
-      },
+      ...SchemaFragments.scriptId,
       path: {
         type: 'string',
         description: 'Filter files by name — substring match or regex (e.g. "utils", "^common-js/", ".*test.*")',
@@ -63,6 +59,36 @@ Files are sorted by position (GAS execution order), which matters for CommonJS m
       },
     },
     required: ['scriptId'],
+    additionalProperties: false,
+    llmGuidance: {
+      positionMatters: 'Files are sorted by GAS execution position — this determines CommonJS module load order. require.gs must be position 0.',
+      typeFilter: 'SERVER_JS = .gs files, HTML = .html templates, JSON = appsscript.json manifest.',
+      pathFilter: 'Plain substring by default; auto-detects regex metacharacters (^$.*+?). Max 200 chars.',
+    },
+  },
+  outputSchema: {
+    type: 'object' as const,
+    properties: {
+      success: { type: 'boolean' },
+      scriptId: { type: 'string' },
+      files: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            name: { type: 'string' },
+            type: { type: 'string' },
+            position: { type: 'number' },
+            size: { type: 'number' },
+            functionSet: { type: 'object' },
+          },
+        },
+      },
+      count: { type: 'number' },
+      error: { type: 'string' },
+      hints: { type: 'object', additionalProperties: { type: 'string' } },
+    },
+    required: ['success'],
   },
 };
 
