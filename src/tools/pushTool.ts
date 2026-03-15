@@ -208,11 +208,22 @@ export async function handlePushTool(
       ? `${result.filesPushed.length} files ${verb}. Run without dryRun to push.`
       : `${result.filesPushed.length} files ${verb}. Run \`exec\` to verify or \`deploy\` to create a stable version.${prune ? ' Remote-only files were pruned.' : ''}`,
   };
+  if (resolved.resolvedFrom === 'clasp-json') {
+    hints.scriptId = `Using scriptId ${scriptId} from .clasp.json`;
+  }
   if (result.mergeSkipped) {
     hints.warning = 'Remote files could not be fetched for merge — remote-only files may have been removed';
   }
   if (result.gitArchived && result.archivedFiles?.length) {
     hints.gitArchive = `${result.archivedFiles.length} remote-only file(s) archived in git. Use \`git log --diff-filter=A -- <filename>\` to find archived files.`;
+  }
+  if (result.claspResult?.clasp === 'created') {
+    hints.claspJson = `Created .clasp.json with scriptId ${scriptId}`;
+  } else if (result.claspResult?.clasp === 'updated') {
+    hints.claspJson = `Updated .clasp.json scriptId to ${scriptId} (reparent)`;
+  }
+  if (result.claspResult?.gitignoreUpdated) {
+    hints.gitignore = 'Added .clasp.json to .gitignore';
   }
   return {
     success: true,

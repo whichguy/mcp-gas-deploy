@@ -179,6 +179,39 @@ describe('resolveProject', () => {
     assert.ok(result.localDir.startsWith(os.homedir()));
     assert.ok(result.localDir.endsWith('test-dir'));
   });
+
+  // --- resolvedFrom ---
+
+  it('resolvedFrom is "clasp-json" when scriptId comes from .clasp.json', async () => {
+    await fs.writeFile(
+      path.join(tmpDir, '.clasp.json'),
+      JSON.stringify({ scriptId: VALID_SCRIPT_ID }),
+      'utf-8'
+    );
+    const result = await resolveProject({ localDir: tmpDir });
+    assert.equal(result.resolvedFrom, 'clasp-json');
+  });
+
+  it('resolvedFrom is "explicit" when scriptId provided with localDir', async () => {
+    const result = await resolveProject({ scriptId: VALID_SCRIPT_ID, localDir: tmpDir });
+    assert.equal(result.resolvedFrom, 'explicit');
+  });
+
+  it('resolvedFrom is "default" when only scriptId provided (no localDir)', async () => {
+    const result = await resolveProject({ scriptId: VALID_SCRIPT_ID });
+    assert.equal(result.resolvedFrom, 'default');
+  });
+
+  it('resolvedFrom is "explicit" when explicit scriptId overrides .clasp.json', async () => {
+    await fs.writeFile(
+      path.join(tmpDir, '.clasp.json'),
+      JSON.stringify({ scriptId: VALID_SCRIPT_ID }),
+      'utf-8'
+    );
+    const result = await resolveProject({ scriptId: ALT_SCRIPT_ID, localDir: tmpDir });
+    assert.equal(result.resolvedFrom, 'explicit');
+    assert.equal(result.isOverride, true);
+  });
 });
 
 describe('readClaspJson', () => {

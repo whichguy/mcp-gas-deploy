@@ -21,11 +21,15 @@ import os from 'node:os';
 import { promises as fs } from 'node:fs';
 import { SCRIPT_ID_PATTERN } from './validation.js';
 
+export type ResolvedFrom = 'explicit' | 'clasp-json' | 'default';
+
 export interface ResolvedProject {
   scriptId: string;
   localDir: string;
   /** true when explicit scriptId differs from what's in .clasp.json — callers should NOT update .clasp.json */
   isOverride: boolean;
+  /** How the scriptId was resolved: 'explicit' (provided by caller), 'clasp-json' (read from .clasp.json), 'default' (scriptId provided, localDir defaulted to ~/gas-projects/<scriptId>) */
+  resolvedFrom: ResolvedFrom;
   warnings?: string[];
 }
 
@@ -113,6 +117,7 @@ export async function resolveProject(params: {
       scriptId: explicitScriptId,
       localDir: resolvedDir,
       isOverride,
+      resolvedFrom: explicitLocalDir ? 'explicit' : 'default',
       ...(warnings.length > 0 ? { warnings } : {}),
     };
   }
@@ -124,6 +129,7 @@ export async function resolveProject(params: {
       scriptId: clasp.scriptId,
       localDir: resolvedDir,
       isOverride: false,
+      resolvedFrom: 'clasp-json',
     };
   }
 
