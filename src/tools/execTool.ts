@@ -7,23 +7,22 @@
  * Pre-exec guard: if no web app URL in gas-deploy.json, returns actionable error.
  */
 
-import path from 'node:path';
-import os from 'node:os';
 import { promises as fs } from 'node:fs';
 import { GASFileOperations } from '../api/gasFileOperations.js';
 import { GASDeployOperations } from '../api/gasDeployOperations.js';
 import { push } from '../sync/rsync.js';
 import { getDeploymentInfo, setDeploymentInfo } from '../config/deployConfig.js';
 import { buildHintContext } from '../utils/hintContext.js';
+import { resolveProject } from '../utils/resolveProject.js';
 import { SessionManager } from '../auth/sessionManager.js';
-import { SCRIPT_ID_PATTERN, FUNCTION_PATTERN, MODULE_NAME_PATTERN } from '../utils/validation.js';
+import { FUNCTION_PATTERN, MODULE_NAME_PATTERN } from '../utils/validation.js';
 import { executeRawJs } from '../utils/gasExecutor.js';
 import type { ValidationResult } from '../validation/commonjsValidator.js';
 import { SchemaFragments } from '../utils/schemaFragments.js';
 import { GuidanceFragments } from '../utils/guidanceFragments.js';
 
 export interface ExecToolParams {
-  scriptId: string;
+  scriptId?: string;
   localDir?: string;
   js_statement?: string;
   module?: string;
@@ -75,10 +74,11 @@ export const EXEC_TOOL_DEFINITION = {
         items: {},
       },
     },
-    required: ['scriptId'],
+    required: [],
     additionalProperties: false,
     llmGuidance: {
       requirements: 'Web app deployment must exist — run deploy first if none.',
+      resolution: GuidanceFragments.claspResolution,
       modes: 'Two mutually exclusive modes: (1) function mode — provide "function" (+ optional "module", "args"); (2) js_statement mode — provide "js_statement" only (no function/module/args).',
       functionMode: 'Function must be exported inside _main(): exports.myFn = function() { ... }. Use "common-js/<name>" (e.g. "common-js/utils") to call a module function directly. Omit module to route via runner-api (default).',
       jsStatementMode: 'Send arbitrary JavaScript. MUST prefix with "return" for IIFEs and expressions (e.g. "return SpreadsheetApp.getActive().getName()"). Without "return", result will be undefined. Use require() to call module functions: "return require(\'common-js/utils\').myFn()".',
@@ -108,16 +108,8 @@ export async function handleExecTool(
   sessionManager: SessionManager,
   deployOps: GASDeployOperations
 ): Promise<ExecToolResult> {
-  const { scriptId, localDir, js_statement: jsStatementParam, module: moduleName, args } = params;
+  const { js_statement: jsStatementParam, module: moduleName, args } = params;
   const functionName = params.function;
-
-  if (!SCRIPT_ID_PATTERN.test(scriptId)) {
-    return {
-      success: false,
-      error: 'Invalid scriptId format',
-      hints: { fix: 'scriptId must be 20+ alphanumeric characters, hyphens, or underscores' },
-    };
-  }
 
   // js_statement mode: send raw JS directly; function mode: build require() call
   if (jsStatementParam && functionName) {
@@ -177,17 +169,19 @@ export async function handleExecTool(
     }
   }
 
-  const resolvedDir = localDir
-    ? path.resolve(localDir)
-    : path.join(os.homedir(), 'gas-projects', scriptId);
-
-  if (localDir && !resolvedDir.startsWith(os.homedir() + path.sep)) {
+  let resolved;
+  try {
+    resolved = await resolveProject({ scriptId: params.scriptId, localDir: params.localDir });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
     return {
       success: false,
-      error: 'localDir must resolve within your home directory',
-      hints: { fix: 'Use an absolute path within your home directory or omit localDir' },
+      error: message,
+      hints: { fix: 'Provide scriptId explicitly, or point localDir to a directory with .clasp.json.' },
     };
   }
+
+  const { scriptId, localDir: resolvedDir } = resolved;
 
   // Pre-exec guard: check if localDir exists
   try {

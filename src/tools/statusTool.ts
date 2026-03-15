@@ -5,12 +5,10 @@
  * Shows which files are local-only, remote-only, in-sync, or modified.
  */
 
-import path from 'node:path';
-import os from 'node:os';
 import { GASFileOperations } from '../api/gasFileOperations.js';
 import { getStatus, type SyncStatus } from '../sync/rsync.js';
-import { SCRIPT_ID_PATTERN } from '../utils/validation.js';
 import { getDeploymentInfo, type DeploymentInfo, STALE_THRESHOLD_MS } from '../config/deployConfig.js';
+import { resolveProject } from '../utils/resolveProject.js';
 import { SchemaFragments } from '../utils/schemaFragments.js';
 import { GuidanceFragments } from '../utils/guidanceFragments.js';
 
@@ -46,7 +44,7 @@ function buildStalenessHints(
 }
 
 export interface StatusToolParams {
-  scriptId: string;
+  scriptId?: string;
   localDir?: string;
 }
 
@@ -100,11 +98,12 @@ export const STATUS_TOOL_DEFINITION = {
       ...SchemaFragments.scriptId,
       ...SchemaFragments.localDir,
     },
-    required: ['scriptId'],
+    required: [],
     additionalProperties: false,
     llmGuidance: {
       deploymentUrls: 'Response includes head (dev), staging, and prod URLs when gas-deploy.json exists. Use these URLs for browser testing.',
       staleness: 'Staleness hints appear when prod is behind staging or local changes are pending. Follow the suggested action.',
+      resolution: GuidanceFragments.claspResolution,
       circularBuffer: GuidanceFragments.circularBuffer,
       errorRecovery: GuidanceFragments.errorRecovery,
     },
@@ -136,29 +135,20 @@ export async function handleStatusTool(
   params: StatusToolParams,
   fileOps: GASFileOperations
 ): Promise<StatusToolResult> {
-  const { scriptId, localDir } = params;
-
-  if (!SCRIPT_ID_PATTERN.test(scriptId)) {
+  let resolved;
+  try {
+    resolved = await resolveProject({ scriptId: params.scriptId, localDir: params.localDir });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
     return {
       success: false,
       summary: '',
-      error: 'Invalid scriptId format',
-      hints: { fix: 'scriptId must be 20+ alphanumeric characters, hyphens, or underscores' },
+      error: message,
+      hints: { fix: 'Provide scriptId explicitly, or point localDir to a directory with .clasp.json.' },
     };
   }
 
-  const resolvedDir = localDir
-    ? path.resolve(localDir)
-    : path.join(os.homedir(), 'gas-projects', scriptId);
-
-  if (localDir && !resolvedDir.startsWith(os.homedir() + path.sep)) {
-    return {
-      success: false,
-      summary: '',
-      error: 'localDir must resolve within your home directory',
-      hints: { fix: 'Use an absolute path within your home directory or omit localDir' },
-    };
-  }
+  const { scriptId, localDir: resolvedDir } = resolved;
 
   try {
     const status = await getStatus(scriptId, resolvedDir, fileOps);

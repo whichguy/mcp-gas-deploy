@@ -40,6 +40,13 @@ export class GuidanceFragments {
     'Max 20 triggers per user per script.',
   ].join('\n');
 
+  static readonly claspResolution = [
+    'scriptId is optional when localDir contains .clasp.json.',
+    'Resolution: localDir .clasp.json → explicit scriptId → error.',
+    'Pull and push create .clasp.json automatically.',
+    'Pass reparent=true to update .clasp.json when providing a different scriptId.',
+  ].join('\n');
+
   static readonly propertiesCopyWorkflow = [
     'Script properties are NOT copied automatically. To copy them:',
     '1. exec in SOURCE project: require("runner-api").getScriptProperties() — returns all key/value pairs.',

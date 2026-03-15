@@ -9,7 +9,7 @@ export class SchemaFragments {
   static readonly scriptId = {
     scriptId: {
       type: 'string' as const,
-      description: 'Google Apps Script project ID',
+      description: 'Google Apps Script project ID (optional if localDir contains .clasp.json)',
       pattern: '^[A-Za-z0-9_-]{20,}$',
     },
   };
@@ -17,7 +17,7 @@ export class SchemaFragments {
   static readonly localDir = {
     localDir: {
       type: 'string' as const,
-      description: 'Local directory for .gs files (default: ~/gas-projects/<scriptId>)',
+      description: 'Local directory containing project files and .clasp.json',
     },
   };
 
@@ -25,6 +25,14 @@ export class SchemaFragments {
     dryRun: {
       type: 'boolean' as const,
       description: 'Preview changes without applying them',
+      default: false,
+    },
+  };
+
+  static readonly reparent = {
+    reparent: {
+      type: 'boolean' as const,
+      description: 'Update scriptId in .clasp.json to match the provided scriptId',
       default: false,
     },
   };

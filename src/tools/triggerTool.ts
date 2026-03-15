@@ -6,12 +6,11 @@
  * operations don't auto-push files — they're project-level ScriptApp calls.
  */
 
-import path from 'node:path';
-import os from 'node:os';
 import { GASDeployOperations } from '../api/gasDeployOperations.js';
 import { getDeploymentInfo, setDeploymentInfo } from '../config/deployConfig.js';
+import { resolveProject } from '../utils/resolveProject.js';
 import { SessionManager } from '../auth/sessionManager.js';
-import { SCRIPT_ID_PATTERN, TRIGGER_ID_PATTERN, FUNCTION_PATTERN } from '../utils/validation.js';
+import { TRIGGER_ID_PATTERN, FUNCTION_PATTERN } from '../utils/validation.js';
 import { executeRawJs, escapeGasString } from '../utils/gasExecutor.js';
 import { SchemaFragments } from '../utils/schemaFragments.js';
 import { GuidanceFragments } from '../utils/guidanceFragments.js';
@@ -19,7 +18,7 @@ import { GuidanceFragments } from '../utils/guidanceFragments.js';
 // --- Types ---
 
 export interface TriggerToolParams {
-  scriptId: string;
+  scriptId?: string;
   localDir?: string;
   action: 'list' | 'create' | 'delete';
 
@@ -407,9 +406,10 @@ export const TRIGGER_TOOL_DEFINITION = {
       triggerId: { type: 'string', description: 'Trigger unique ID (from list with detailed=true)' },
       deleteAll: { type: 'boolean', description: 'Delete ALL project triggers (use with caution)' },
     },
-    required: ['scriptId', 'action'],
+    required: ['action'],
     additionalProperties: false,
     llmGuidance: {
+      resolution: GuidanceFragments.claspResolution,
       operations: 'list (detailed:true for IDs) | create (triggerType+options) | delete (triggerId/functionName/deleteAll)',
       triggerTypes: 'time: scheduled | spreadsheet: onEdit/onChange | form: onFormSubmit | calendar: onEventUpdated | document: onOpen',
       limitations: 'Max 20 triggers/user/script | calendar=onEventUpdated only | Docs=onOpen only | no addon/gmail (use manifest)',
@@ -443,17 +443,22 @@ export async function handleTriggerTool(
   sessionManager: SessionManager,
   deployOps: GASDeployOperations,
 ): Promise<TriggerToolResult> {
-  const { scriptId, action } = params;
+  const { action } = params;
 
   try {
-    // Validate scriptId
-    if (!SCRIPT_ID_PATTERN.test(scriptId)) {
+    let resolved;
+    try {
+      resolved = await resolveProject({ scriptId: params.scriptId, localDir: params.localDir });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
       return {
         success: false, action,
-        error: 'Invalid scriptId format',
-        hints: { fix: 'scriptId must be 20+ alphanumeric characters, hyphens, or underscores' },
+        error: message,
+        hints: { fix: 'Provide scriptId explicitly, or point localDir to a directory with .clasp.json.' },
       };
     }
+
+    const { scriptId, localDir: resolvedDir } = resolved;
 
     // Auth check
     const token = await sessionManager.getValidToken();
@@ -462,20 +467,6 @@ export async function handleTriggerTool(
         success: false, action,
         error: 'Not authenticated',
         hints: { fix: "Run auth with action='login' first" },
-      };
-    }
-
-    // headUrl resolution: gas-deploy.json → getOrCreateHeadDeployment fallback
-    // Falls back to API if no local config — trigger ops don't require localDir
-    const resolvedDir = params.localDir
-      ? path.resolve(params.localDir)
-      : path.join(os.homedir(), 'gas-projects', scriptId);
-
-    if (params.localDir && !resolvedDir.startsWith(os.homedir() + path.sep)) {
-      return {
-        success: false, action,
-        error: 'localDir must resolve within your home directory',
-        hints: { fix: 'Use an absolute path within your home directory or omit localDir' },
       };
     }
 
