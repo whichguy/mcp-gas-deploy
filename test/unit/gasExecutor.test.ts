@@ -146,6 +146,10 @@ describe('gasExecutor', () => {
 
       const fetchedUrl = fetchStub.firstCall.args[0] as string;
       assert.ok(!fetchedUrl.includes('/a/macros/'));
+      assert.ok(!fetchedUrl.includes('func='), 'func should not be in URL');
+      const opts = fetchStub.firstCall.args[1] as RequestInit;
+      assert.equal(opts.method, 'POST');
+      assert.equal(opts.body, JSON.stringify({ func: '1+1' }));
     });
 
     it('returns GAS execution error with logs', async () => {

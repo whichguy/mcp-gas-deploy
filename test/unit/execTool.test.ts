@@ -303,6 +303,14 @@ describe('handleExecTool', () => {
       firstUrl.includes('macros/s/ABC/exec'),
       `URL should contain normalized path, got: ${firstUrl}`,
     );
+    assert.ok(
+      !firstUrl.includes('func='),
+      `URL should not contain func param, got: ${firstUrl}`,
+    );
+    assert.ok(
+      firstUrl.includes('_mcp_run=true'),
+      `URL should contain _mcp_run=true, got: ${firstUrl}`,
+    );
   });
 
   it('redirect to google.com is followed (2 fetch calls, final success)', async () => {

@@ -59,24 +59,26 @@ export async function executeRawJs(
 ): Promise<RawJsResult> {
   const normalizedUrl = normalizeWebAppUrl(headUrl);
   const separator = normalizedUrl.includes('?') ? '&' : '?';
-  const execGetUrl = `${normalizedUrl}${separator}_mcp_run=true&func=${encodeURIComponent(jsStatement)}`;
+  const execUrl = `${normalizedUrl}${separator}_mcp_run=true`;
 
   // Follow redirects manually so the Bearer token is only forwarded to *.google.com hops.
   // GAS web apps use an IAP redirect chain (script.google.com → accounts.google.com) before
   // serving the response; redirect:'follow' would send the token to any redirect target.
   const signal = AbortSignal.timeout(timeoutMs);
-  let response = await fetch(execGetUrl, {
-    method: 'GET',
+  let response = await fetch(execUrl, {
+    method: 'POST',
     headers: {
       'Authorization': `Bearer ${token}`,
       'Accept': 'application/json',
+      'Content-Type': 'application/json',
     },
+    body: JSON.stringify({ func: jsStatement }),
     redirect: 'manual',
     signal,
   });
 
   let redirectHops = 0;
-  let currentUrl = execGetUrl;
+  let currentUrl = execUrl;
   while ((response.status === 301 || response.status === 302 || response.status === 303 || response.status === 307 || response.status === 308) && redirectHops < 5) {
     const location = response.headers.get('location');
     if (!location) break;
