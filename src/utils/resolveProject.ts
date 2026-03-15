@@ -9,7 +9,7 @@
  * Resolution cascade (in priority order):
  *   1. localDir provided + has .clasp.json → read scriptId from it (explicit scriptId overrides)
  *   2. localDir provided + no .clasp.json + scriptId provided → use explicit scriptId
- *   3. localDir omitted + scriptId provided → fallback ~/gas-projects/<scriptId>
+ *   3. localDir omitted + scriptId provided → use CWD (check .clasp.json there too)
  *   4. Neither provided → error with actionable hint
  *
  * Path traversal guard: resolved localDir must be within the user's home directory.
@@ -21,14 +21,14 @@ import os from 'node:os';
 import { promises as fs } from 'node:fs';
 import { SCRIPT_ID_PATTERN } from './validation.js';
 
-export type ResolvedFrom = 'explicit' | 'clasp-json' | 'default';
+export type ResolvedFrom = 'explicit' | 'clasp-json';
 
 export interface ResolvedProject {
   scriptId: string;
   localDir: string;
   /** true when explicit scriptId differs from what's in .clasp.json — callers should NOT update .clasp.json */
   isOverride: boolean;
-  /** How the scriptId was resolved: 'explicit' (provided by caller), 'clasp-json' (read from .clasp.json), 'default' (scriptId provided, localDir defaulted to ~/gas-projects/<scriptId>) */
+  /** How the scriptId was resolved: 'explicit' (provided by caller), 'clasp-json' (read from .clasp.json) */
   resolvedFrom: ResolvedFrom;
   warnings?: string[];
 }
@@ -77,9 +77,9 @@ export async function resolveProject(params: {
       ? path.join(os.homedir(), explicitLocalDir.slice(1))
       : path.resolve(explicitLocalDir);
   } else {
-    // Case 3: localDir omitted + scriptId provided → fallback ~/gas-projects/<scriptId>
+    // Case 3: localDir omitted + scriptId provided → use CWD
     // scriptId is guaranteed non-empty here (Case 4 already handled)
-    resolvedDir = path.join(os.homedir(), 'gas-projects', explicitScriptId!);
+    resolvedDir = process.cwd();
   }
 
   // Path traversal guard — resolved path must be within home directory
@@ -91,8 +91,8 @@ export async function resolveProject(params: {
     );
   }
 
-  // Try reading .clasp.json from localDir
-  const clasp = explicitLocalDir ? await readClaspJson(resolvedDir) : null;
+  // Try reading .clasp.json from resolvedDir (covers both explicit localDir and CWD fallback)
+  const clasp = await readClaspJson(resolvedDir);
 
   if (explicitScriptId) {
     // Validate explicit scriptId format
@@ -117,7 +117,7 @@ export async function resolveProject(params: {
       scriptId: explicitScriptId,
       localDir: resolvedDir,
       isOverride,
-      resolvedFrom: explicitLocalDir ? 'explicit' : 'default',
+      resolvedFrom: 'explicit',
       ...(warnings.length > 0 ? { warnings } : {}),
     };
   }

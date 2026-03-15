@@ -24,6 +24,7 @@ import { handleProjectsTool, PROJECTS_TOOL_DEFINITION } from './tools/projectsTo
 import { handleProjectCopyTool, PROJECT_COPY_TOOL_DEFINITION } from './tools/projectCopyTool.js';
 import { handleLsTool, LS_TOOL_DEFINITION } from './tools/lsTool.js';
 import { handleTriggerTool, TRIGGER_TOOL_DEFINITION } from './tools/triggerTool.js';
+import { handleCreateTool, CREATE_TOOL_DEFINITION } from './tools/createTool.js';
 import { GASDeployOperations } from './api/gasDeployOperations.js';
 import { GASProjectOperations } from './api/gasProjectOperations.js';
 
@@ -46,6 +47,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
   return {
     tools: [
       AUTH_TOOL_DEFINITION,
+      CREATE_TOOL_DEFINITION,
       LS_TOOL_DEFINITION,
       PULL_TOOL_DEFINITION,
       STATUS_TOOL_DEFINITION,
@@ -84,6 +86,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return {
           content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
         };
+      }
+
+      case 'create': {
+        const result = await handleCreateTool(args as unknown as Parameters<typeof handleCreateTool>[0], projectOps, fileOps);
+        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       }
 
       case 'ls': {

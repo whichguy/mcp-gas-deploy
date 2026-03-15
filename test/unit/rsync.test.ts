@@ -868,30 +868,14 @@ describe('pull', () => {
     );
   });
 
-  it('deletes orphaned .gas-sync-state.json if it exists from a previous version', async () => {
-    // Simulate old state file left by pre-simplification version
-    const stateFilePath = path.join(tmpDir, '.gas-sync-state.json');
-    await fs.writeFile(stateFilePath, '{"main":"abc123"}', 'utf-8');
-    const fileOps = makeFileOps([gasFile('main', '// main')]);
-
-    await pull('scriptId', tmpDir, fileOps);
-
-    await assert.rejects(
-      () => fs.access(stateFilePath),
-      { code: 'ENOENT' },
-      'Orphaned .gas-sync-state.json should be deleted by pull'
-    );
-  });
-
-  it('creates localDir if it does not exist', async () => {
-    const newDir = path.join(tmpDir, 'new-project');
+  it('returns error when localDir does not exist', async () => {
+    const newDir = path.join(tmpDir, 'non-existent');
     const fileOps = makeFileOps([gasFile('main', '// main')]);
 
     const result = await pull('scriptId', newDir, fileOps);
 
-    assert.ok(result.success);
-    const stat = await fs.stat(newDir);
-    assert.ok(stat.isDirectory());
+    assert.equal(result.success, false);
+    assert.ok(result.error?.includes('does not exist'), `expected dir-not-exist error, got: ${result.error}`);
   });
 });
 
@@ -1230,9 +1214,9 @@ describe('push preview (dryRun)', () => {
   });
 });
 
-// --- ensureClaspFiles (via successful push) ---
+// --- push no longer writes .clasp.json ---
 
-describe('ensureClaspFiles (via push)', () => {
+describe('push — no ensureClaspFiles side effects', () => {
   const SCRIPT_ID = 'claspTestId123456789x';
   const validGs = `function _main() { exports.fn = function() {}; }\n__defineModule__(_main, false);`;
   let tmpDir: string;
@@ -1248,90 +1232,41 @@ describe('ensureClaspFiles (via push)', () => {
     sinon.restore();
   });
 
-  it('.clasp.json written with correct scriptId after successful push', async () => {
+  it('.clasp.json NOT written after successful push', async () => {
     await fs.writeFile(path.join(tmpDir, 'main.gs'), validGs, 'utf-8');
     const fileOps = makeFileOps([]);
 
     const result = await push(SCRIPT_ID, tmpDir, fileOps, { skipValidation: true });
 
     assert.equal(result.success, true);
-    const claspJson = JSON.parse(await fs.readFile(path.join(tmpDir, '.clasp.json'), 'utf-8'));
-    assert.equal(claspJson.scriptId, SCRIPT_ID);
-  });
-
-  it('.clasp.json NOT written on dryRun push', async () => {
-    await fs.writeFile(path.join(tmpDir, 'main.gs'), validGs, 'utf-8');
-    const fileOps = makeFileOps([]);
-
-    await push(SCRIPT_ID, tmpDir, fileOps, { dryRun: true, skipValidation: true });
-
     await assert.rejects(
       () => fs.readFile(path.join(tmpDir, '.clasp.json'), 'utf-8'),
       { code: 'ENOENT' },
-      '.clasp.json must not be written on dryRun',
+      '.clasp.json must not be written by push',
     );
   });
 
-  it('.gitignore created with .clasp.json entry when absent', async () => {
+  it('.gitignore NOT written after successful push', async () => {
     await fs.writeFile(path.join(tmpDir, 'main.gs'), validGs, 'utf-8');
     const fileOps = makeFileOps([]);
 
     await push(SCRIPT_ID, tmpDir, fileOps, { skipValidation: true });
 
-    const content = await fs.readFile(path.join(tmpDir, '.gitignore'), 'utf-8');
-    assert.ok(content.split('\n').map(l => l.trim()).includes('.clasp.json'), `.gitignore should list .clasp.json; got:\n${content}`);
+    await assert.rejects(
+      () => fs.readFile(path.join(tmpDir, '.gitignore'), 'utf-8'),
+      { code: 'ENOENT' },
+      '.gitignore must not be written by push',
+    );
   });
 
-  it('.gitignore has .clasp.json appended when existing file lacks it', async () => {
+  it('result does not include claspResult', async () => {
     await fs.writeFile(path.join(tmpDir, 'main.gs'), validGs, 'utf-8');
-    await fs.writeFile(path.join(tmpDir, '.gitignore'), 'node_modules\n', 'utf-8');
-    const fileOps = makeFileOps([]);
-
-    await push(SCRIPT_ID, tmpDir, fileOps, { skipValidation: true });
-
-    const content = await fs.readFile(path.join(tmpDir, '.gitignore'), 'utf-8');
-    const lines = content.split('\n').map(l => l.trim());
-    assert.ok(lines.includes('node_modules'), 'existing entry preserved');
-    assert.ok(lines.includes('.clasp.json'), '.clasp.json appended');
-  });
-
-  it('.gitignore not modified when .clasp.json already listed', async () => {
-    await fs.writeFile(path.join(tmpDir, 'main.gs'), validGs, 'utf-8');
-    await fs.writeFile(path.join(tmpDir, '.gitignore'), 'node_modules\n.clasp.json\n', 'utf-8');
-    const fileOps = makeFileOps([]);
-
-    await push(SCRIPT_ID, tmpDir, fileOps, { skipValidation: true });
-
-    const content = await fs.readFile(path.join(tmpDir, '.gitignore'), 'utf-8');
-    const occurrences = content.split('\n').filter(l => l.trim() === '.clasp.json').length;
-    assert.equal(occurrences, 1, '.clasp.json must not be duplicated');
-  });
-
-  it('failure to write .clasp.json does not fail the push', async () => {
-    await fs.writeFile(path.join(tmpDir, 'main.gs'), validGs, 'utf-8');
-    // Create .clasp.json as a directory so writeFile fails
-    await fs.mkdir(path.join(tmpDir, '.clasp.json'));
     const fileOps = makeFileOps([]);
 
     const result = await push(SCRIPT_ID, tmpDir, fileOps, { skipValidation: true });
 
-    assert.equal(result.success, true, 'push must succeed even if .clasp.json write fails');
-  });
-
-  it('.clasp.json NOT overwritten when it already exists (reparent default)', async () => {
-    const existingId = 'existingscriptid1234567890';
-    await fs.writeFile(
-      path.join(tmpDir, '.clasp.json'),
-      JSON.stringify({ scriptId: existingId }),
-      'utf-8'
-    );
-    await fs.writeFile(path.join(tmpDir, 'main.gs'), validGs, 'utf-8');
-    const fileOps = makeFileOps([]);
-
-    await push(SCRIPT_ID, tmpDir, fileOps, { skipValidation: true });
-
-    const clasp = JSON.parse(await fs.readFile(path.join(tmpDir, '.clasp.json'), 'utf-8'));
-    assert.equal(clasp.scriptId, existingId, '.clasp.json should preserve existing scriptId');
+    assert.equal(result.success, true);
+    assert.equal((result as Record<string, unknown>).claspResult, undefined, 'claspResult should not be in result');
   });
 });
 
