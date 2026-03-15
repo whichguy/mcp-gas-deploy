@@ -564,9 +564,10 @@ async function handleList(params: TriggerToolParams, headUrl: string, token: str
   }
 
   if (!data?.success) {
+    const gasError = data?.error ?? `Failed to list triggers (raw: ${JSON.stringify(data)})`;
     return {
       success: false, action: 'list',
-      error: data?.error ?? 'Failed to list triggers',
+      error: gasError,
       hints: { fix: 'Check script permissions and deployment configuration' },
     };
   }
@@ -656,7 +657,7 @@ async function handleCreate(params: TriggerToolParams, headUrl: string, token: s
   }
 
   if (!data?.success) {
-    const errorMsg = data?.error ?? 'Failed to create trigger';
+    const errorMsg = data?.error ?? `Failed to create trigger (raw: ${JSON.stringify(data)})`;
     const hints: Record<string, string> = { fix: 'Check function name, trigger type, and script permissions' };
     if (errorMsg.includes('maximum') || errorMsg.includes('limit') || errorMsg.includes('20')) {
       hints.fix = 'GAS limits 20 triggers per user per script. Use action=list to review, then delete unused triggers';
@@ -736,9 +737,10 @@ async function handleDelete(params: TriggerToolParams, headUrl: string, token: s
   }
 
   if (!data?.success) {
+    const gasError = data?.error ?? `Failed to delete trigger(s) (raw: ${JSON.stringify(data)})`;
     return {
       success: false, action: 'delete',
-      error: data?.error ?? 'Failed to delete trigger(s)',
+      error: gasError,
       hints: { fix: 'Check trigger ID or function name. Use action=list with detailed=true to verify', ...extraHints },
     };
   }

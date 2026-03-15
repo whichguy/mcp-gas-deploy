@@ -441,6 +441,66 @@ describe('handleTriggerTool', () => {
     assert.ok(result.error?.includes('25') || result.error?.includes('Invalid hours'));
   });
 
+  // --- Raw error surface fallback ---
+
+  it('list: surfaces raw data when IIFE returns success:false without error field', async () => {
+    sinon.stub(globalThis, 'fetch').resolves(
+      makeFetchResponse({
+        status: 200,
+        json: {
+          success: true,
+          result: { success: false, someField: 'unexpected' },
+        },
+      }),
+    );
+    const result = await handleTriggerTool(
+      { scriptId: VALID_SCRIPT_ID, action: 'list', localDir: tmpDir },
+      makeSession(), makeDeployOps(),
+    );
+    assert.equal(result.success, false);
+    assert.ok(result.error?.includes('raw:'));
+    assert.ok(result.error?.includes('"someField"'));
+    assert.ok(result.error?.includes('"unexpected"'));
+  });
+
+  it('create: surfaces raw data when IIFE returns success:false without error field', async () => {
+    sinon.stub(globalThis, 'fetch').resolves(
+      makeFetchResponse({
+        status: 200,
+        json: {
+          success: true,
+          result: { success: false },
+        },
+      }),
+    );
+    const result = await handleTriggerTool(
+      { scriptId: VALID_SCRIPT_ID, action: 'create', functionName: 'onTimer', triggerType: 'time', interval: 'hours', intervalValue: 1, localDir: tmpDir },
+      makeSession(), makeDeployOps(),
+    );
+    assert.equal(result.success, false);
+    assert.ok(result.error?.includes('raw:'));
+    assert.ok(result.error?.includes('"success":false'));
+  });
+
+  it('delete: surfaces raw data when IIFE returns success:false without error field', async () => {
+    sinon.stub(globalThis, 'fetch').resolves(
+      makeFetchResponse({
+        status: 200,
+        json: {
+          success: true,
+          result: { success: false },
+        },
+      }),
+    );
+    const result = await handleTriggerTool(
+      { scriptId: VALID_SCRIPT_ID, action: 'delete', deleteAll: true, localDir: tmpDir },
+      makeSession(), makeDeployOps(),
+    );
+    assert.equal(result.success, false);
+    assert.ok(result.error?.includes('raw:'));
+    assert.ok(result.error?.includes('"success":false'));
+  });
+
   it('create: spreadsheet trigger requires spreadsheetEvent', async () => {
     sinon.stub(globalThis, 'fetch');
     const result = await handleTriggerTool(
