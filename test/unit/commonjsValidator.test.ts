@@ -302,6 +302,132 @@ __defineModule__(_main, true);`;
     });
   });
 
+  describe('Comment and string false positives', () => {
+    it('ignores require() in single-line comments before _main', () => {
+      const src = `// Run via: require('Module').run()
+function _main() {
+  const M = require('Module');
+  exports.run = M.run;
+}
+__defineModule__(_main, false);`;
+      const result = validate('Test.gs', src);
+      assert.ok(result.valid, `Expected valid, got: ${JSON.stringify(result.errors)}`);
+    });
+
+    it('ignores require() in multi-line comments before _main', () => {
+      const src = `/* Callers use require('Module') to access this */
+function _main() {
+  exports.x = 1;
+}
+__defineModule__(_main, false);`;
+      const result = validate('Test.gs', src);
+      assert.ok(result.valid, `Expected valid, got: ${JSON.stringify(result.errors)}`);
+    });
+
+    it('handles braces in single-quoted strings without breaking brace counting', () => {
+      const src = `function _main() {
+  const firstBrace = text.indexOf('{');
+  const startChar = '{';
+  exports.parse = function(t) { return t; };
+}
+__defineModule__(_main, false);`;
+      const result = validate('Parser.gs', src);
+      assert.ok(result.valid, `Expected valid, got: ${JSON.stringify(result.errors)}`);
+    });
+
+    it('handles braces in double-quoted strings without breaking brace counting', () => {
+      const src = `function _main() {
+  const x = "{ not a real brace }";
+  exports.x = x;
+}
+__defineModule__(_main, false);`;
+      const result = validate('Mod.gs', src);
+      assert.ok(result.valid, `Expected valid, got: ${JSON.stringify(result.errors)}`);
+    });
+
+    it('handles quotes inside regex literals without breaking parse', () => {
+      // /"/g regex contains a quote that must not start a false string
+      const src = `function _main() {
+  var clean = str.replace(/"/g, '""');
+  exports.clean = clean;
+}
+__defineModule__(_main, false);`;
+      const result = validate('CsvUtil.gs', src);
+      assert.ok(result.valid, `Expected valid, got: ${JSON.stringify(result.errors)}`);
+    });
+
+    it('handles template literals with ${} expressions', () => {
+      const src = `function _main() {
+  const msg = \`Hello \${name}, score: \${score}\`;
+  exports.greet = function(name, score) { return msg; };
+}
+__defineModule__(_main, false);`;
+      const result = validate('Greeter.gs', src);
+      assert.ok(result.valid, `Expected valid, got: ${JSON.stringify(result.errors)}`);
+    });
+
+    it('handles template literals with URL containing // (not a comment)', () => {
+      const src = `function _main() {
+  const url = \`https://api.example.com/\${path}\`;
+  exports.url = url;
+}
+__defineModule__(_main, false);`;
+      const result = validate('Api.gs', src);
+      assert.ok(result.valid, `Expected valid, got: ${JSON.stringify(result.errors)}`);
+    });
+
+    it('allows require() in hoisted functions outside _main (brace depth > 0)', () => {
+      const src = `function _main() {
+  exports.ASK_AI = function(p) { return 'answer'; };
+}
+function ASK_AI(prompt) {
+  return require('CustomFunctions').ASK_AI(prompt);
+}
+__defineModule__(_main, false);`;
+      const result = validate('CustomFunctions.gs', src);
+      assert.ok(result.valid, `Expected valid, got: ${JSON.stringify(result.errors)}`);
+    });
+
+    it('allows exports.* in hoisted functions outside _main (brace depth > 0)', () => {
+      const src = `function _main() {
+  exports.greet = function(name) { return name; };
+}
+function hoistedHelper() {
+  exports.greet = function(name) { return name; };
+}
+__defineModule__(_main, false);`;
+      const result = validate('HoistedExports.gs', src);
+      assert.ok(result.valid, `Expected valid, got: ${JSON.stringify(result.errors)}`);
+    });
+
+    it('allows __events__.* in hoisted functions outside _main (brace depth > 0)', () => {
+      const src = `function _main() {
+  __events__.doGet = function(e) { return ContentService.createTextOutput('ok'); };
+}
+function hoistedHandler() {
+  __events__.doGet = function(e) { return ContentService.createTextOutput('ok'); };
+}
+__defineModule__(_main, true);`;
+      const result = validate('HoistedEvents.gs', src);
+      assert.ok(result.valid, `Expected valid, got: ${JSON.stringify(result.errors)}`);
+    });
+
+    it('still detects real require() outside _main when comments also have require()', () => {
+      const src = `// require('some-doc-example')
+const Bad = require('Bad');
+function _main() {
+  exports.x = 1;
+}
+__defineModule__(_main, false);`;
+      const result = validate('Mixed.gs', src);
+      const rules = result.errors.map(e => e.rule);
+      assert.ok(rules.includes('TOP_LEVEL_REQUIRE'));
+      // Should only report line 2, not line 1 (the comment)
+      const reqErr = result.errors.find(e => e.rule === 'TOP_LEVEL_REQUIRE');
+      assert.equal(reqErr!.line, 2);
+    });
+  });
+
   describe('Full valid module', () => {
     it('passes a complete utility module', () => {
       const src = `function _main() {
