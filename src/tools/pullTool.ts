@@ -9,6 +9,8 @@ import os from 'node:os';
 import { GASFileOperations } from '../api/gasFileOperations.js';
 import { pull } from '../sync/rsync.js';
 import { SCRIPT_ID_PATTERN } from '../utils/validation.js';
+import { SchemaFragments } from '../utils/schemaFragments.js';
+import { GuidanceFragments } from '../utils/guidanceFragments.js';
 
 export interface PullToolParams {
   scriptId: string;
@@ -26,29 +28,43 @@ export interface PullToolResult {
 
 export const PULL_TOOL_DEFINITION = {
   name: 'pull',
-  description: `Fetch GAS project files to local directory. Auto-initializes git.
-
-All .gs files use the GAS CommonJS module pattern — edit them as modules:
-  function _main() { exports.fn = function() { ... }; }
-  __defineModule__(_main, false); // false=lazy | true=eager (trigger files)
-New files: place in common-js/ folder using this pattern.`,
+  description: '[SYNC:PULL] Fetch GAS project files to local directory — auto-initializes git. WHEN: first setup or syncing remote changes. AVOID: use status to check sync state first. Example: pull({scriptId: "1abc...", dryRun: true})',
+  annotations: {
+    title: 'Pull Files from GAS',
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: true,
+  },
   inputSchema: {
     type: 'object' as const,
     properties: {
-      scriptId: {
-        type: 'string',
-        description: 'Google Apps Script project ID',
-      },
+      ...SchemaFragments.scriptId,
       targetDir: {
         type: 'string',
         description: 'Local directory to write files to (default: ~/gas-projects/<scriptId>)',
       },
-      dryRun: {
-        type: 'boolean',
-        description: 'Preview files without writing',
-      },
+      ...SchemaFragments.dryRun,
     },
     required: ['scriptId'],
+    additionalProperties: false,
+    llmGuidance: {
+      commonJs: GuidanceFragments.commonJsPattern,
+      dryRun: 'Use dryRun: true to preview which files will be written without modifying the filesystem.',
+      gitInit: 'Pull auto-initializes a git repo in the target directory for version tracking.',
+      errorRecovery: GuidanceFragments.errorRecovery,
+    },
+  },
+  outputSchema: {
+    type: 'object' as const,
+    properties: {
+      success: { type: 'boolean' },
+      filesPulled: { type: 'array', items: { type: 'string' } },
+      localDir: { type: 'string' },
+      error: { type: 'string' },
+      hints: { type: 'object', additionalProperties: { type: 'string' } },
+    },
+    required: ['success', 'filesPulled', 'localDir'],
   },
 };
 

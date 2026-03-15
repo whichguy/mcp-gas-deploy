@@ -13,6 +13,8 @@ import { getDeploymentInfo, setDeploymentInfo } from '../config/deployConfig.js'
 import { SessionManager } from '../auth/sessionManager.js';
 import { SCRIPT_ID_PATTERN, TRIGGER_ID_PATTERN, FUNCTION_PATTERN } from '../utils/validation.js';
 import { executeRawJs, escapeGasString } from '../utils/gasExecutor.js';
+import { SchemaFragments } from '../utils/schemaFragments.js';
+import { GuidanceFragments } from '../utils/guidanceFragments.js';
 
 // --- Types ---
 
@@ -335,24 +337,18 @@ function buildDocumentCreateIife(params: TriggerToolParams): string {
 
 export const TRIGGER_TOOL_DEFINITION = {
   name: 'trigger',
-  description: `Manage GAS installable triggers — list, create, and delete time-based or event-driven triggers.
-
-Requirements:
-- Web app deployment must exist (HEAD deployment URL needed).
-- For create: the target function must be globally accessible. In CommonJS projects,
-  use __events__.fnName = handler inside _main() with loadNow: true.
-- deleteAll removes ALL project triggers, not just ones created by this tool.
-- Max 20 triggers per user per script.
-
-Examples:
-  trigger({scriptId, action: "list", detailed: true})
-  trigger({scriptId, action: "create", functionName: "onTimer", triggerType: "time", interval: "hours", intervalValue: 1})
-  trigger({scriptId, action: "delete", functionName: "onTimer"})`,
-  annotations: { destructiveHint: true, readOnlyHint: false, openWorldHint: true },
+  description: '[TRIGGER] Manage GAS installable triggers — list, create, delete. WHEN: scheduled tasks, spreadsheet events, form submissions. AVOID: max 20 per user per script; deleteAll removes ALL. Example: trigger({scriptId: "1abc...", action: "list", detailed: true})',
+  annotations: {
+    title: 'Manage Triggers',
+    readOnlyHint: false,
+    destructiveHint: true,
+    idempotentHint: false,
+    openWorldHint: true,
+  },
   inputSchema: {
     type: 'object' as const,
     properties: {
-      scriptId: { type: 'string', description: 'Google Apps Script project ID' },
+      ...SchemaFragments.scriptId,
       localDir: { type: 'string', description: 'Local directory (only to find gas-deploy.json for headUrl)' },
       action: {
         type: 'string',
@@ -410,20 +406,33 @@ Examples:
       // Delete
       triggerId: { type: 'string', description: 'Trigger unique ID (from list with detailed=true)' },
       deleteAll: { type: 'boolean', description: 'Delete ALL project triggers (use with caution)' },
-
-      // LLM guidance
-      llmGuidance: {
-        type: 'object',
-        description: JSON.stringify({
-          operations: 'list (detailed:true for IDs) | create (triggerType+options) | delete (triggerId/functionName/deleteAll)',
-          triggerTypes: 'time: scheduled | spreadsheet: onEdit/onChange | form: onFormSubmit | calendar: onEventUpdated | document: onOpen',
-          limitations: 'Max 20 triggers/user/script | calendar=onEventUpdated only | Docs=onOpen only | no addon/gmail (use manifest)',
-          commonjs: 'Target function must be globally visible. In CommonJS: __events__.fnName = handler inside _main() with loadNow: true',
-          workflow: 'list first → create with specific type → verify with list → delete by triggerId or functionName',
-        }),
-      },
     },
     required: ['scriptId', 'action'],
+    additionalProperties: false,
+    llmGuidance: {
+      operations: 'list (detailed:true for IDs) | create (triggerType+options) | delete (triggerId/functionName/deleteAll)',
+      triggerTypes: 'time: scheduled | spreadsheet: onEdit/onChange | form: onFormSubmit | calendar: onEventUpdated | document: onOpen',
+      limitations: 'Max 20 triggers/user/script | calendar=onEventUpdated only | Docs=onOpen only | no addon/gmail (use manifest)',
+      commonjs: GuidanceFragments.triggerSetup,
+      workflow: 'list first → create with specific type → verify with list → delete by triggerId or functionName',
+      errorRecovery: GuidanceFragments.errorRecovery,
+    },
+  },
+  outputSchema: {
+    type: 'object' as const,
+    properties: {
+      success: { type: 'boolean' },
+      action: { type: 'string' },
+      triggers: { type: 'array' },
+      totalTriggers: { type: 'number' },
+      triggerId: { type: 'string' },
+      triggerType: { type: 'string' },
+      functionName: { type: 'string' },
+      deleted: { type: 'number' },
+      error: { type: 'string' },
+      hints: { type: 'object', additionalProperties: { type: 'string' } },
+    },
+    required: ['success', 'action'],
   },
 };
 

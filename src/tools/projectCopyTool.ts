@@ -22,6 +22,8 @@ import { GASFileOperations } from '../api/gasFileOperations.js';
 import { GASProjectOperations } from '../api/gasProjectOperations.js';
 import { SCRIPT_ID_PATTERN } from '../utils/validation.js';
 import { orderFilesForPush } from '../sync/rsync.js';
+import { SchemaFragments } from '../utils/schemaFragments.js';
+import { GuidanceFragments } from '../utils/guidanceFragments.js';
 
 export interface ProjectCopyToolParams {
   scriptId: string;
@@ -41,32 +43,45 @@ export interface ProjectCopyToolResult {
 
 export const PROJECT_COPY_TOOL_DEFINITION = {
   name: 'project_copy',
-  description: `Copy an existing GAS project to a new standalone project.
-
-Copies all files (.gs, .html, .json) from the source project to a newly created project.
-The new project is always standalone — if the source was container-bound (bound to a Sheet
-or Doc), the parent document is NOT copied.
-
-NOT copied automatically:
-  - Script properties (PropertiesService) — copy manually after creation
-  - Trigger registrations — re-create manually or via exec in the new project
-  - Container parent (Sheets/Docs data) — create a new spreadsheet separately
-
-After copy, use push/exec/deploy with the returned newScriptId to work with the new project.`,
-  annotations: { destructiveHint: false },
+  description: '[PROJECT:COPY] Copy a GAS project\'s files to a new or existing project — preserves file order and appsscript.json. WHEN: cloning a template, forking, copying into container-bound project. AVOID: properties/triggers NOT copied (use the exec workflow in llmGuidance). Example: project_copy({scriptId: "source123", title: "My Fork"})',
+  annotations: {
+    title: 'Copy GAS Project',
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: false,
+    openWorldHint: true,
+  },
   inputSchema: {
     type: 'object' as const,
     properties: {
-      scriptId: {
-        type: 'string',
-        description: 'Source GAS project scriptId to copy from',
-      },
+      ...SchemaFragments.scriptId,
       title: {
         type: 'string',
         description: 'Title for the new project (default: "Copy of <source title>")',
       },
     },
     required: ['scriptId'],
+    additionalProperties: false,
+    llmGuidance: {
+      propertiesCopy: GuidanceFragments.propertiesCopyWorkflow,
+      triggerCopy: 'Triggers are NOT copied. Re-create them in the new project via the trigger tool.',
+      containerBound: 'If the source was container-bound (Sheets/Docs), the copy is standalone. Create a new spreadsheet and link it separately.',
+      errorRecovery: GuidanceFragments.errorRecovery,
+    },
+  },
+  outputSchema: {
+    type: 'object' as const,
+    properties: {
+      success: { type: 'boolean' },
+      newScriptId: { type: 'string' },
+      title: { type: 'string' },
+      filesCopied: { type: 'number' },
+      sourceScriptId: { type: 'string' },
+      warnings: { type: 'array', items: { type: 'string' } },
+      error: { type: 'string' },
+      hints: { type: 'object', additionalProperties: { type: 'string' } },
+    },
+    required: ['success'],
   },
 };
 

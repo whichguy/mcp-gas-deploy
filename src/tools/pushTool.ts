@@ -17,6 +17,8 @@ import { GASFileOperations } from '../api/gasFileOperations.js';
 import { push } from '../sync/rsync.js';
 import type { PushPreviewResult } from '../sync/rsync.js';
 import { SCRIPT_ID_PATTERN } from '../utils/validation.js';
+import { SchemaFragments } from '../utils/schemaFragments.js';
+import { GuidanceFragments } from '../utils/guidanceFragments.js';
 
 export interface PushToolParams {
   scriptId: string;
@@ -46,31 +48,20 @@ export interface PushToolResult {
 
 export const PUSH_TOOL_DEFINITION = {
   name: 'push',
-  description: `Push local .gs files to GAS after CommonJS validation.
-
-ALL .gs files MUST follow the CommonJS module pattern:
-  function _main() { exports.fn = function() { ... }; }
-  __defineModule__(_main, false); // false=lazy | true=eager (trigger files)
-Trigger files: assign __events__.onOpen = ... inside _main() — no bare trigger functions.
-
-Validation errors include line numbers and fix suggestions.
-skipValidation=true: ONLY for system shim files (require.gs, __mcp_exec.gs).`,
-  annotations: { destructiveHint: true },
+  description: '[SYNC:PUSH] Push local .gs files to GAS with CommonJS validation. WHEN: uploading local changes. AVOID: use push({action: "preview"}) to see diff first. Example: push({scriptId: "1abc...", action: "preview"})',
+  annotations: {
+    title: 'Push Files to GAS',
+    readOnlyHint: false,
+    destructiveHint: true,
+    idempotentHint: false,
+    openWorldHint: true,
+  },
   inputSchema: {
     type: 'object' as const,
     properties: {
-      scriptId: {
-        type: 'string',
-        description: 'Google Apps Script project ID',
-      },
-      localDir: {
-        type: 'string',
-        description: 'Local directory with .gs files (default: ~/gas-projects/<scriptId>)',
-      },
-      dryRun: {
-        type: 'boolean',
-        description: 'Preview which files would be pushed without actually pushing',
-      },
+      ...SchemaFragments.scriptId,
+      ...SchemaFragments.localDir,
+      ...SchemaFragments.dryRun,
       skipValidation: {
         type: 'boolean',
         description: 'ONLY for system shim files (require.gs, __mcp_exec.gs) — never use for regular modules',
@@ -86,6 +77,27 @@ skipValidation=true: ONLY for system shim files (require.gs, __mcp_exec.gs).`,
       },
     },
     required: ['scriptId'],
+    additionalProperties: false,
+    llmGuidance: {
+      commonJs: GuidanceFragments.commonJsPattern,
+      preview: 'Use action="preview" to see a structured diff (toAdd, toUpdate, toPreserve, toPrune) before pushing.',
+      skipValidation: 'ONLY for system shim files (require.gs, __mcp_exec.gs). Never for user modules — validation catches real bugs.',
+      prune: 'Default false (safe). Set true to remove remote-only files. Git archive preserves deleted files for recovery.',
+      triggers: GuidanceFragments.triggerSetup,
+      errorRecovery: GuidanceFragments.errorRecovery,
+    },
+  },
+  outputSchema: {
+    type: 'object' as const,
+    properties: {
+      success: { type: 'boolean' },
+      filesPushed: { type: 'array', items: { type: 'string' } },
+      validationErrors: { type: 'array' },
+      preview: { type: 'object' },
+      error: { type: 'string' },
+      hints: { type: 'object', additionalProperties: { type: 'string' } },
+    },
+    required: ['success', 'filesPushed'],
   },
 };
 

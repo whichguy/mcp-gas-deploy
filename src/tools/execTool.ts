@@ -19,6 +19,8 @@ import { SessionManager } from '../auth/sessionManager.js';
 import { SCRIPT_ID_PATTERN, FUNCTION_PATTERN, MODULE_NAME_PATTERN } from '../utils/validation.js';
 import { executeRawJs } from '../utils/gasExecutor.js';
 import type { ValidationResult } from '../validation/commonjsValidator.js';
+import { SchemaFragments } from '../utils/schemaFragments.js';
+import { GuidanceFragments } from '../utils/guidanceFragments.js';
 
 export interface ExecToolParams {
   scriptId: string;

@@ -13,6 +13,7 @@
  */
 
 import { GASProjectOperations } from '../api/gasProjectOperations.js';
+import { GuidanceFragments } from '../utils/guidanceFragments.js';
 
 export interface ProjectsToolParams {
   action: 'list' | 'search';
@@ -34,15 +35,14 @@ export interface ProjectsToolResult {
 
 export const PROJECTS_TOOL_DEFINITION = {
   name: 'projects',
-  description: `Discover standalone Google Apps Script projects. Returns scriptIds and names.
-
-action=list: list all GAS projects visible to the authenticated user (up to 100, most recently modified first).
-action=search: filter by name substring (requires query parameter).
-
-LIMITATION: Only standalone scripts are returned. Container-bound scripts (bound to a Sheet, Doc, or Slide) are not discoverable via this tool — use the known scriptId directly.
-
-Requires drive.readonly OAuth scope. If you see a scope error, re-authenticate with auth action=login.`,
-  annotations: { readOnlyHint: true },
+  description: '[PROJECT:DISCOVER] Find standalone GAS projects by listing or searching. WHEN: finding a project\'s scriptId. AVOID: container-bound scripts not discoverable — use known scriptId. Example: projects({action: "search", query: "my-app"})',
+  annotations: {
+    title: 'Discover GAS Projects',
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: true,
+  },
   inputSchema: {
     type: 'object' as const,
     properties: {
@@ -57,6 +57,35 @@ Requires drive.readonly OAuth scope. If you see a scope error, re-authenticate w
       },
     },
     required: ['action'],
+    additionalProperties: false,
+    llmGuidance: {
+      limitation: 'Only standalone scripts are discoverable. Container-bound scripts (attached to Sheets/Docs/Slides) are not separate Drive files — use the known scriptId directly.',
+      scope: 'Requires drive.readonly OAuth scope. If you see a scope error, re-authenticate with auth action="login".',
+      pagination: 'Returns up to 100 projects, most recently modified first. For larger lists, use search with a query filter.',
+      errorRecovery: GuidanceFragments.errorRecovery,
+    },
+  },
+  outputSchema: {
+    type: 'object' as const,
+    properties: {
+      success: { type: 'boolean' },
+      projects: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            scriptId: { type: 'string' },
+            title: { type: 'string' },
+            createTime: { type: 'string' },
+            updateTime: { type: 'string' },
+          },
+        },
+      },
+      count: { type: 'number' },
+      error: { type: 'string' },
+      hints: { type: 'object', additionalProperties: { type: 'string' } },
+    },
+    required: ['success'],
   },
 };
 
