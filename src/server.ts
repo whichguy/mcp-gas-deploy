@@ -23,6 +23,7 @@ import { handleDeployTool, DEPLOY_TOOL_DEFINITION } from './tools/deployTool.js'
 import { handleProjectsTool, PROJECTS_TOOL_DEFINITION } from './tools/projectsTool.js';
 import { handleProjectCopyTool, PROJECT_COPY_TOOL_DEFINITION } from './tools/projectCopyTool.js';
 import { handleLsTool, LS_TOOL_DEFINITION } from './tools/lsTool.js';
+import { handleTriggerTool, TRIGGER_TOOL_DEFINITION } from './tools/triggerTool.js';
 import { GASDeployOperations } from './api/gasDeployOperations.js';
 import { GASProjectOperations } from './api/gasProjectOperations.js';
 
@@ -53,6 +54,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       DEPLOY_TOOL_DEFINITION,
       PROJECTS_TOOL_DEFINITION,
       PROJECT_COPY_TOOL_DEFINITION,
+      TRIGGER_TOOL_DEFINITION,
     ],
   };
 });
@@ -122,6 +124,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'project_copy': {
         const result = await handleProjectCopyTool(args as unknown as Parameters<typeof handleProjectCopyTool>[0], fileOps, projectOps);
+        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+      }
+
+      case 'trigger': {
+        const result = await handleTriggerTool(
+          args as unknown as Parameters<typeof handleTriggerTool>[0],
+          sessionManager,
+          deployOps,
+        );
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       }
 
