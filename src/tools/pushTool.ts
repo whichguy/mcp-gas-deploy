@@ -15,6 +15,7 @@ import { GASFileOperations } from '../api/gasFileOperations.js';
 import { push } from '../sync/rsync.js';
 import type { PushPreviewResult } from '../sync/rsync.js';
 import { resolveProject } from '../utils/resolveProject.js';
+import type { ResolvedFrom } from '../utils/resolveProject.js';
 import { SchemaFragments } from '../utils/schemaFragments.js';
 import { GuidanceFragments } from '../utils/guidanceFragments.js';
 
@@ -106,7 +107,8 @@ async function handlePreviewAction(
   scriptId: string,
   params: PushToolParams,
   fileOps: GASFileOperations,
-  resolvedDir: string
+  resolvedDir: string,
+  resolvedFrom: ResolvedFrom
 ): Promise<PushToolResult> {
   const { skipValidation, prune } = params;
   const result = await push(scriptId, resolvedDir, fileOps, { dryRun: true, skipValidation, prune });
@@ -128,13 +130,18 @@ async function handlePreviewAction(
   if (toPrune.length > 0) parts.push(`${toPrune.length} prune`);
   const summary = parts.length > 0 ? parts.join(', ') : 'no changes';
 
+  const hints: Record<string, string> = {
+    next: `preview: ${summary}. Run push to apply changes.`,
+  };
+  if (resolvedFrom === 'clasp-json') {
+    hints.scriptId = `Using scriptId ${scriptId} from .clasp.json`;
+  }
+
   return {
     success: true,
     filesPushed: [],
     preview: { toAdd, toUpdate, toPreserve, toPrune, totalFilesAfterPush, prune: prune ?? false },
-    hints: {
-      next: `preview: ${summary}. Run push to apply changes.`,
-    },
+    hints,
   };
 }
 
@@ -161,7 +168,7 @@ export async function handlePushTool(
 
   const action = params.action ?? 'push';
   if (action === 'preview') {
-    return handlePreviewAction(scriptId, params, fileOps, resolvedDir);
+    return handlePreviewAction(scriptId, params, fileOps, resolvedDir, resolved.resolvedFrom);
   }
 
   const result = await push(scriptId, resolvedDir, fileOps, { dryRun, skipValidation, prune, reparent: params.reparent });
@@ -208,11 +215,22 @@ export async function handlePushTool(
       ? `${result.filesPushed.length} files ${verb}. Run without dryRun to push.`
       : `${result.filesPushed.length} files ${verb}. Run \`exec\` to verify or \`deploy\` to create a stable version.${prune ? ' Remote-only files were pruned.' : ''}`,
   };
+  if (resolved.resolvedFrom === 'clasp-json') {
+    hints.scriptId = `Using scriptId ${scriptId} from .clasp.json`;
+  }
   if (result.mergeSkipped) {
     hints.warning = 'Remote files could not be fetched for merge — remote-only files may have been removed';
   }
   if (result.gitArchived && result.archivedFiles?.length) {
     hints.gitArchive = `${result.archivedFiles.length} remote-only file(s) archived in git. Use \`git log --diff-filter=A -- <filename>\` to find archived files.`;
+  }
+  if (result.claspResult?.clasp === 'created') {
+    hints.claspJson = `Created .clasp.json with scriptId ${scriptId}`;
+  } else if (result.claspResult?.clasp === 'updated') {
+    hints.claspJson = `Updated .clasp.json scriptId to ${scriptId} (reparent)`;
+  }
+  if (result.claspResult?.gitignoreUpdated) {
+    hints.gitignore = 'Added .clasp.json to .gitignore';
   }
   return {
     success: true,

@@ -136,16 +136,29 @@ export async function handlePullTool(
   }
 
   // Write .clasp.json so the directory is self-describing for future operations
-  await ensureClaspFiles(resolvedDir, scriptId, reparent);
+  const claspResult = await ensureClaspFiles(resolvedDir, scriptId, reparent);
+
+  const hints: Record<string, string> = {
+    next: 'Edit files locally, then run `push` to deploy or `exec` to test',
+    commonjs: 'Remember: all code inside `function _main()`, call `__defineModule__(_main, false)` at end',
+    triggers: 'For trigger files: use `__events__.onOpen = ...` inside _main() and loadNow: true',
+  };
+  if (resolved.resolvedFrom === 'clasp-json') {
+    hints.scriptId = `Using scriptId ${scriptId} from .clasp.json`;
+  }
+  if (claspResult.clasp === 'created') {
+    hints.claspJson = `Created .clasp.json with scriptId ${scriptId}`;
+  } else if (claspResult.clasp === 'updated') {
+    hints.claspJson = `Updated .clasp.json scriptId to ${scriptId} (reparent)`;
+  }
+  if (claspResult.gitignoreUpdated) {
+    hints.gitignore = 'Added .clasp.json to .gitignore';
+  }
 
   return {
     success: true,
     filesPulled: result.filesPulled,
     localDir: resolvedDir,
-    hints: {
-      next: 'Edit files locally, then run `push` to deploy or `exec` to test',
-      commonjs: 'Remember: all code inside `function _main()`, call `__defineModule__(_main, false)` at end',
-      triggers: 'For trigger files: use `__events__.onOpen = ...` inside _main() and loadNow: true',
-    },
+    hints,
   };
 }

@@ -185,16 +185,20 @@ export async function handleLsTool(
       functionSet: f.functionSet,
     }));
 
+    const hints: Record<string, string> = {};
+    if (resolved.resolvedFrom === 'clasp-json') {
+      hints.scriptId = `Using scriptId ${scriptId} from .clasp.json`;
+    }
+    hints.next = mapped.length > 0
+      ? `Found ${mapped.length} file(s). Use pull to download files locally, or push to sync changes back.`
+      : 'No files found. The project may be empty or all files were filtered out.';
+
     return {
       success: true,
       scriptId,
       files: mapped,
       count: mapped.length,
-      hints: {
-        next: mapped.length > 0
-          ? `Found ${mapped.length} file(s). Use pull to download files locally, or push to sync changes back.`
-          : 'No files found. The project may be empty or all files were filtered out.',
-      },
+      hints,
     };
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);

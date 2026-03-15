@@ -311,9 +311,11 @@ export async function handleExecTool(
     }
 
     // Return prefix hint: if js_statement mode and statement doesn't start with 'return', warn
-    const successHints: Record<string, string> = {
-      next: `${jsStatementParam ? 'JavaScript statement' : 'Function'} executed. ${filesSync} files pushed before execution.`,
-    };
+    const successHints: Record<string, string> = {};
+    if (resolved.resolvedFrom === 'clasp-json') {
+      successHints.scriptId = `Using scriptId ${scriptId} from .clasp.json`;
+    }
+    successHints.next = `${jsStatementParam ? 'JavaScript statement' : 'Function'} executed. ${filesSync} files pushed before execution.`;
     if (jsStatementParam && !jsStatementParam.trimStart().startsWith('return')) {
       successHints.returnPrefix = 'js_statement does not start with "return" — result will be undefined for expression-only code. Prefix with "return" for a non-void result.';
     }

@@ -40,6 +40,7 @@ export interface PushResult {
   gitArchived?: boolean;
   archivedFiles?: string[];
   preview?: PushPreviewResult;
+  claspResult?: EnsureClaspResult;
 }
 
 export interface PushPreviewResult {
@@ -290,31 +291,40 @@ function computePreview(
   return { toAdd, toUpdate, toPreserve, toPrune, totalFilesAfterPush };
 }
 
+export interface EnsureClaspResult {
+  /** 'created' if .clasp.json was written for the first time, 'updated' if reparented, 'skipped' if already existed */
+  clasp: 'created' | 'updated' | 'skipped';
+  /** true if .clasp.json was added to .gitignore (new entry or new file) */
+  gitignoreUpdated: boolean;
+}
+
 /**
  * Write .clasp.json and ensure .gitignore lists it. Non-fatal — errors do not fail the caller.
  *
  * @param reparent When false (default), only writes .clasp.json if it doesn't exist.
  *                 When true, overwrites .clasp.json even if it exists (re-associates the directory).
+ * @returns What was modified — callers use this for dynamic hints.
  */
-export async function ensureClaspFiles(localDir: string, scriptId: string, reparent?: boolean): Promise<void> {
+export async function ensureClaspFiles(localDir: string, scriptId: string, reparent?: boolean): Promise<EnsureClaspResult> {
+  let claspAction: 'created' | 'updated' | 'skipped' = 'skipped';
   try {
     const claspPath = path.join(localDir, '.clasp.json');
-    // Only write if file doesn't exist OR reparent is explicitly true
-    let shouldWrite = !!reparent;
-    if (!shouldWrite) {
-      try {
-        await fs.access(claspPath);
-        // File exists and reparent is false — do not overwrite
-      } catch {
-        // File does not exist — safe to write
-        shouldWrite = true;
-      }
+    let fileExists = false;
+    try {
+      await fs.access(claspPath);
+      fileExists = true;
+    } catch {
+      // File does not exist
     }
+
+    const shouldWrite = !!reparent || !fileExists;
     if (shouldWrite) {
       await fs.writeFile(claspPath, JSON.stringify({ scriptId }, null, 2) + '\n', 'utf-8');
+      claspAction = fileExists ? 'updated' : 'created';
     }
   } catch { /* non-fatal */ }
 
+  let gitignoreUpdated = false;
   try {
     const gitignorePath = path.join(localDir, '.gitignore');
     let content = '';
@@ -323,8 +333,11 @@ export async function ensureClaspFiles(localDir: string, scriptId: string, repar
     if (!lines.includes('.clasp.json')) {
       const suffix = content.length > 0 && !content.endsWith('\n') ? '\n' : '';
       await fs.writeFile(gitignorePath, content + suffix + '.clasp.json\n', 'utf-8');
+      gitignoreUpdated = true;
     }
   } catch { /* non-fatal */ }
+
+  return { clasp: claspAction, gitignoreUpdated };
 }
 
 // --- Git archive ---
@@ -635,9 +648,9 @@ export async function push(
       }
 
       await fileOps.updateProjectFiles(scriptId, orderedFiles);
-      await ensureClaspFiles(localDir, scriptId, options.reparent);
+      const claspResult = await ensureClaspFiles(localDir, scriptId, options.reparent);
 
-      return { success: true, filesPushed: allLocalNames, mergeSkipped, gitArchived, archivedFiles };
+      return { success: true, filesPushed: allLocalNames, mergeSkipped, gitArchived, archivedFiles, claspResult };
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
       return { success: false, filesPushed: [], error: message };

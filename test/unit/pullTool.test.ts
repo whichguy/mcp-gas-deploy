@@ -271,4 +271,64 @@ describe('handlePullTool', () => {
     assert.equal(result.success, true);
     assert.equal(result.localDir, tmpDir);
   });
+
+  // --- Dynamic hints ---
+
+  it('hints include scriptId when resolved from .clasp.json', async () => {
+    await fs.writeFile(
+      path.join(tmpDir, '.clasp.json'),
+      JSON.stringify({ scriptId: VALID_SCRIPT_ID }),
+      'utf-8'
+    );
+
+    const result = await handlePullTool(
+      { localDir: tmpDir },
+      makeFileOps([gasFile('main')]),
+    );
+
+    assert.equal(result.success, true);
+    assert.ok(result.hints.scriptId?.includes('from .clasp.json'), `expected clasp-json hint, got: ${result.hints.scriptId}`);
+  });
+
+  it('hints include claspJson when .clasp.json is created', async () => {
+    const result = await handlePullTool(
+      { scriptId: VALID_SCRIPT_ID, localDir: tmpDir },
+      makeFileOps([gasFile('main')]),
+    );
+
+    assert.equal(result.success, true);
+    assert.ok(result.hints.claspJson?.includes('Created'), `expected Created hint, got: ${result.hints.claspJson}`);
+  });
+
+  it('hints include claspJson updated when reparent=true', async () => {
+    await fs.writeFile(
+      path.join(tmpDir, '.clasp.json'),
+      JSON.stringify({ scriptId: 'oldscriptidxxxxxxxxx1234567890' }),
+      'utf-8'
+    );
+
+    const result = await handlePullTool(
+      { scriptId: VALID_SCRIPT_ID, localDir: tmpDir, reparent: true },
+      makeFileOps([gasFile('main')]),
+    );
+
+    assert.equal(result.success, true);
+    assert.ok(result.hints.claspJson?.includes('Updated'), `expected Updated hint, got: ${result.hints.claspJson}`);
+  });
+
+  it('no claspJson hint when .clasp.json already exists and reparent is false', async () => {
+    await fs.writeFile(
+      path.join(tmpDir, '.clasp.json'),
+      JSON.stringify({ scriptId: VALID_SCRIPT_ID }),
+      'utf-8'
+    );
+
+    const result = await handlePullTool(
+      { localDir: tmpDir },
+      makeFileOps([gasFile('main')]),
+    );
+
+    assert.equal(result.success, true);
+    assert.equal(result.hints.claspJson, undefined, 'no claspJson hint when .clasp.json already exists');
+  });
 });

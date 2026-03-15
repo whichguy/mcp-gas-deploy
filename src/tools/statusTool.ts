@@ -163,6 +163,10 @@ export async function handleStatusTool(
 
     const hints: Record<string, string> = {};
 
+    if (resolved.resolvedFrom === 'clasp-json') {
+      hints.scriptId = `Using scriptId ${scriptId} from .clasp.json`;
+    }
+
     if (status.localOnly.length > 0 || status.modified.length > 0) {
       hints.next = 'local changes detected — push or exec to sync';
     } else if (status.remoteOnly.length > 0) {
