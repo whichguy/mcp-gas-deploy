@@ -160,7 +160,7 @@ function buildDeleteByFunctionIife(functionName: string): string {
   try {
     var triggers = ScriptApp.getProjectTriggers();
     var deleted = 0;
-    for (var i = 0; i < triggers.length; i++) {
+    for (var i = triggers.length - 1; i >= 0; i--) {
       if (triggers[i].getHandlerFunction() === '${safeName}') {
         ScriptApp.deleteTrigger(triggers[i]);
         deleted++;
@@ -780,6 +780,18 @@ function validateTimeParams(params: TriggerToolParams): TriggerToolResult | null
     }
     if (!Number.isInteger(params.intervalValue) || params.intervalValue < 1 || params.intervalValue > 24) {
       return { success: false, action: 'create', error: `Invalid hours value: ${params.intervalValue}`, hints: { fix: 'everyHours supports 1-24' } };
+    }
+  }
+
+  if (params.interval === 'days' && params.intervalValue !== undefined) {
+    if (!Number.isInteger(params.intervalValue) || params.intervalValue < 1) {
+      return { success: false, action: 'create', error: `Invalid days value: ${params.intervalValue}`, hints: { fix: 'everyDays requires a positive integer (e.g. 1, 2, 7)' } };
+    }
+  }
+
+  if (params.interval === 'weeks' && params.intervalValue !== undefined) {
+    if (!Number.isInteger(params.intervalValue) || params.intervalValue < 1) {
+      return { success: false, action: 'create', error: `Invalid weeks value: ${params.intervalValue}`, hints: { fix: 'everyWeeks requires a positive integer (e.g. 1, 2)' } };
     }
   }
 
