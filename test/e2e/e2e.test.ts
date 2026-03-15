@@ -34,6 +34,7 @@ import { handleStatusTool } from '../../src/tools/statusTool.js';
 import { handleProjectsTool } from '../../src/tools/projectsTool.js';
 import { handleDeployTool } from '../../src/tools/deployTool.js';
 import { handleExecTool } from '../../src/tools/execTool.js';
+import { handleTriggerTool } from '../../src/tools/triggerTool.js';
 
 // Setup chain mirrors src/server.ts wiring
 const sessionManager = new SessionManager();
@@ -192,5 +193,66 @@ describe('mcp-gas-deploy E2E', function () {
       String(result.result).includes('Hello'),
       `Expected result to include 'Hello', got: ${JSON.stringify(result.result)}`,
     );
+  });
+
+  it('T9: trigger: list → create (time, everyHours) → list detailed → delete → verify clean', async function () {
+    // T9 uses the same persistent exec fixture as T8
+    const EXEC_FIXTURE_PATH = path.join(os.homedir(), '.cache', 'mcp-gas-deploy-test', 'exec-project.json');
+    let fixture: { scriptId: string; localDir: string } | undefined;
+    try {
+      fixture = JSON.parse(await fs.readFile(EXEC_FIXTURE_PATH, 'utf-8'));
+    } catch {
+      return this.skip(); // fixture not set up
+    }
+
+    const fixtureScriptId = fixture!.scriptId;
+    const fixtureLocalDir = fixture!.localDir;
+
+    // Step 1: List existing triggers (baseline)
+    const listBefore = await handleTriggerTool(
+      { scriptId: fixtureScriptId, action: 'list', localDir: fixtureLocalDir },
+      sessionManager, deployOps,
+    );
+    if (!listBefore.success && listBefore.error?.includes('browser authorization')) {
+      return this.skip();
+    }
+    assert.ok(listBefore.success, `list (before) failed: ${listBefore.error}`);
+    const baselineCount = listBefore.totalTriggers ?? 0;
+
+    // Step 2: Create a time-based trigger (everyHours(1) on doGet — globally visible)
+    const createResult = await handleTriggerTool(
+      { scriptId: fixtureScriptId, action: 'create', functionName: 'doGet', triggerType: 'time', interval: 'hours', intervalValue: 1, localDir: fixtureLocalDir },
+      sessionManager, deployOps,
+    );
+    assert.ok(createResult.success, `create failed: ${createResult.error}`);
+    assert.ok(createResult.triggerId, 'Expected triggerId from create');
+
+    // Step 3: List detailed — verify new trigger appears
+    const listDetailed = await handleTriggerTool(
+      { scriptId: fixtureScriptId, action: 'list', detailed: true, localDir: fixtureLocalDir },
+      sessionManager, deployOps,
+    );
+    assert.ok(listDetailed.success, `list (detailed) failed: ${listDetailed.error}`);
+    assert.equal(listDetailed.totalTriggers, baselineCount + 1, 'Expected one more trigger after create');
+    assert.ok(
+      listDetailed.triggers?.some(t => t.functionName === 'doGet'),
+      'Expected doGet trigger in detailed listing',
+    );
+
+    // Step 4: Delete by functionName
+    const deleteResult = await handleTriggerTool(
+      { scriptId: fixtureScriptId, action: 'delete', functionName: 'doGet', localDir: fixtureLocalDir },
+      sessionManager, deployOps,
+    );
+    assert.ok(deleteResult.success, `delete failed: ${deleteResult.error}`);
+    assert.ok((deleteResult.deleted ?? 0) >= 1, 'Expected at least 1 deleted');
+
+    // Step 5: List again — verify clean (back to baseline)
+    const listAfter = await handleTriggerTool(
+      { scriptId: fixtureScriptId, action: 'list', localDir: fixtureLocalDir },
+      sessionManager, deployOps,
+    );
+    assert.ok(listAfter.success, `list (after) failed: ${listAfter.error}`);
+    assert.equal(listAfter.totalTriggers, baselineCount, 'Expected trigger count back to baseline');
   });
 });

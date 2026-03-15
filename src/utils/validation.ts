@@ -2,3 +2,4 @@
 export const SCRIPT_ID_PATTERN = /^[A-Za-z0-9_-]{20,}$/;
 export const FUNCTION_PATTERN = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 export const MODULE_NAME_PATTERN = /^[A-Za-z_$][A-Za-z0-9_$-]*(?:\/[A-Za-z_$][A-Za-z0-9_$-]*)*$/;
+export const TRIGGER_ID_PATTERN = /^[0-9]+$/;
