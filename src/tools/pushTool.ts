@@ -26,7 +26,6 @@ export interface PushToolParams {
   skipValidation?: boolean;
   prune?: boolean;
   action?: 'push' | 'preview';
-  reparent?: boolean;
 }
 
 export interface PushToolResult {
@@ -75,7 +74,6 @@ export const PUSH_TOOL_DEFINITION = {
         enum: ['push', 'preview'],
         description: "'push' (default): validate and push files. 'preview': show structured diff without pushing.",
       },
-      ...SchemaFragments.reparent,
     },
     required: [],
     additionalProperties: false,
@@ -171,7 +169,7 @@ export async function handlePushTool(
     return handlePreviewAction(scriptId, params, fileOps, resolvedDir, resolved.resolvedFrom);
   }
 
-  const result = await push(scriptId, resolvedDir, fileOps, { dryRun, skipValidation, prune, reparent: params.reparent });
+  const result = await push(scriptId, resolvedDir, fileOps, { dryRun, skipValidation, prune });
 
   if (!result.success) {
     if (result.validationErrors && result.validationErrors.length > 0) {
@@ -223,14 +221,6 @@ export async function handlePushTool(
   }
   if (result.gitArchived && result.archivedFiles?.length) {
     hints.gitArchive = `${result.archivedFiles.length} remote-only file(s) archived in git. Use \`git log --diff-filter=A -- <filename>\` to find archived files.`;
-  }
-  if (result.claspResult?.clasp === 'created') {
-    hints.claspJson = `Created .clasp.json with scriptId ${scriptId}`;
-  } else if (result.claspResult?.clasp === 'updated') {
-    hints.claspJson = `Updated .clasp.json scriptId to ${scriptId} (reparent)`;
-  }
-  if (result.claspResult?.gitignoreUpdated) {
-    hints.gitignore = 'Added .clasp.json to .gitignore';
   }
   return {
     success: true,

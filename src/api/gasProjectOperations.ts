@@ -83,13 +83,13 @@ export class GASProjectOperations {
    * Create a new standalone GAS project with the given title.
    * Returns the new project's scriptId and title.
    */
-  async createProject(title: string): Promise<{ scriptId: string; title: string }> {
+  async createProject(title: string, parentId?: string): Promise<{ scriptId: string; title: string }> {
     return this.authOps.makeAuthenticatedRequest(async (scriptApi) => {
       console.error(`createProject: creating "${title}"`);
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const response = await (scriptApi.projects as any).create({
-        requestBody: { title },
+        requestBody: { title, ...(parentId ? { parentId } : {}) },
       });
 
       const scriptId = response.data.scriptId as string | undefined;

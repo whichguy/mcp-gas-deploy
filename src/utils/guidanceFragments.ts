@@ -42,9 +42,9 @@ export class GuidanceFragments {
 
   static readonly claspResolution = [
     'scriptId is optional when localDir contains .clasp.json.',
-    'Resolution cascade: (1) localDir + .clasp.json → read scriptId (explicit scriptId overrides); (2) localDir + explicit scriptId → use explicit; (3) no localDir + explicit scriptId → fallback ~/gas-projects/<scriptId>; (4) neither → error.',
-    'Pull and push create .clasp.json automatically.',
-    'Pass reparent=true to update .clasp.json when providing a different scriptId.',
+    'Resolution cascade: (1) localDir + .clasp.json → read scriptId (explicit scriptId overrides); (2) localDir + explicit scriptId → use explicit; (3) no localDir + explicit scriptId → use CWD; (4) neither → error.',
+    'Use the create tool to bootstrap new projects (creates .clasp.json, git init, etc.).',
+    'To update .clasp.json with a new scriptId, use the create tool (which writes .clasp.json during bootstrap).',
   ].join('\n');
 
   static readonly propertiesCopyWorkflow = [

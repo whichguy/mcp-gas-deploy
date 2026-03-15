@@ -145,7 +145,7 @@ describe('handlePullTool', () => {
     assert.ok(result.error, 'error should be set');
   });
 
-  it('default localDir resolves to ~/gas-projects/<scriptId>', async () => {
+  it('default localDir resolves to CWD when only scriptId provided', async () => {
     // Use a stub that rejects so we get result without pulling (we only care about localDir)
     const failingOps = {
       getProjectFiles: sinon.stub().rejects(new Error('test')),
@@ -158,13 +158,9 @@ describe('handlePullTool', () => {
     );
 
     // result.localDir is always set (even on failure)
-    assert.ok(
-      result.localDir.includes('gas-projects'),
-      `localDir should contain gas-projects, got: ${result.localDir}`,
-    );
-    assert.ok(
-      result.localDir.includes(VALID_SCRIPT_ID),
-      `localDir should contain scriptId, got: ${result.localDir}`,
+    assert.equal(
+      result.localDir, process.cwd(),
+      `localDir should be CWD, got: ${result.localDir}`,
     );
   });
 
@@ -200,7 +196,7 @@ describe('handlePullTool', () => {
     assert.equal(result.filesPulled.length, 1);
   });
 
-  it('writes .clasp.json after successful pull', async () => {
+  it('pull does NOT write .clasp.json (create tool handles that)', async () => {
     const result = await handlePullTool(
       { scriptId: VALID_SCRIPT_ID, localDir: tmpDir },
       makeFileOps([gasFile('main')]),
@@ -208,48 +204,34 @@ describe('handlePullTool', () => {
 
     assert.equal(result.success, true);
 
-    // .clasp.json should be written
-    const claspContent = await fs.readFile(path.join(tmpDir, '.clasp.json'), 'utf-8');
-    const clasp = JSON.parse(claspContent);
-    assert.equal(clasp.scriptId, VALID_SCRIPT_ID);
+    // .clasp.json should NOT be written by pull
+    const exists = await fs.access(path.join(tmpDir, '.clasp.json')).then(() => true).catch(() => false);
+    assert.equal(exists, false, '.clasp.json should not be created by pull');
   });
 
-  it('does NOT update .clasp.json when it already exists (unless reparent)', async () => {
-    const existingScriptId = 'existingscriptidxxx1234567890';
-    await fs.writeFile(
-      path.join(tmpDir, '.clasp.json'),
-      JSON.stringify({ scriptId: existingScriptId }),
-      'utf-8'
+  it('pull fails on non-existent directory with clean error', async () => {
+    const nonExistentDir = path.join(tmpDir, 'does-not-exist');
+
+    const result = await handlePullTool(
+      { scriptId: VALID_SCRIPT_ID, localDir: nonExistentDir },
+      makeFileOps([gasFile('main')]),
     );
 
-    await handlePullTool(
+    assert.equal(result.success, false);
+    assert.ok(result.error?.includes('does not exist'), `error should mention non-existent dir, got: ${result.error}`);
+  });
+
+  it('pull does not init git', async () => {
+    const result = await handlePullTool(
       { scriptId: VALID_SCRIPT_ID, localDir: tmpDir },
       makeFileOps([gasFile('main')]),
     );
 
-    // .clasp.json should still have the original scriptId
-    const claspContent = await fs.readFile(path.join(tmpDir, '.clasp.json'), 'utf-8');
-    const clasp = JSON.parse(claspContent);
-    assert.equal(clasp.scriptId, existingScriptId, '.clasp.json should not be overwritten without reparent');
-  });
+    assert.equal(result.success, true);
 
-  it('updates .clasp.json when reparent=true', async () => {
-    const existingScriptId = 'existingscriptidxxx1234567890';
-    await fs.writeFile(
-      path.join(tmpDir, '.clasp.json'),
-      JSON.stringify({ scriptId: existingScriptId }),
-      'utf-8'
-    );
-
-    await handlePullTool(
-      { scriptId: VALID_SCRIPT_ID, localDir: tmpDir, reparent: true },
-      makeFileOps([gasFile('main')]),
-    );
-
-    // .clasp.json should now have the new scriptId
-    const claspContent = await fs.readFile(path.join(tmpDir, '.clasp.json'), 'utf-8');
-    const clasp = JSON.parse(claspContent);
-    assert.equal(clasp.scriptId, VALID_SCRIPT_ID, '.clasp.json should be updated with reparent=true');
+    // .git should NOT be created by pull
+    const gitExists = await fs.access(path.join(tmpDir, '.git')).then(() => true).catch(() => false);
+    assert.equal(gitExists, false, '.git should not be created by pull');
   });
 
   it('returns error when neither scriptId nor .clasp.json is available', async () => {
@@ -290,45 +272,14 @@ describe('handlePullTool', () => {
     assert.ok(result.hints.scriptId?.includes('from .clasp.json'), `expected clasp-json hint, got: ${result.hints.scriptId}`);
   });
 
-  it('hints include claspJson when .clasp.json is created', async () => {
+  it('no claspJson hints from pull (create handles .clasp.json)', async () => {
     const result = await handlePullTool(
       { scriptId: VALID_SCRIPT_ID, localDir: tmpDir },
       makeFileOps([gasFile('main')]),
     );
 
     assert.equal(result.success, true);
-    assert.ok(result.hints.claspJson?.includes('Created'), `expected Created hint, got: ${result.hints.claspJson}`);
-  });
-
-  it('hints include claspJson updated when reparent=true', async () => {
-    await fs.writeFile(
-      path.join(tmpDir, '.clasp.json'),
-      JSON.stringify({ scriptId: 'oldscriptidxxxxxxxxx1234567890' }),
-      'utf-8'
-    );
-
-    const result = await handlePullTool(
-      { scriptId: VALID_SCRIPT_ID, localDir: tmpDir, reparent: true },
-      makeFileOps([gasFile('main')]),
-    );
-
-    assert.equal(result.success, true);
-    assert.ok(result.hints.claspJson?.includes('Updated'), `expected Updated hint, got: ${result.hints.claspJson}`);
-  });
-
-  it('no claspJson hint when .clasp.json already exists and reparent is false', async () => {
-    await fs.writeFile(
-      path.join(tmpDir, '.clasp.json'),
-      JSON.stringify({ scriptId: VALID_SCRIPT_ID }),
-      'utf-8'
-    );
-
-    const result = await handlePullTool(
-      { localDir: tmpDir },
-      makeFileOps([gasFile('main')]),
-    );
-
-    assert.equal(result.success, true);
-    assert.equal(result.hints.claspJson, undefined, 'no claspJson hint when .clasp.json already exists');
+    assert.equal(result.hints.claspJson, undefined, 'no claspJson hint from pull');
+    assert.equal(result.hints.gitignore, undefined, 'no gitignore hint from pull');
   });
 });

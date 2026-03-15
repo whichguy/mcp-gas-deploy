@@ -52,13 +52,12 @@ describe('resolveProject', () => {
     assert.equal(result.isOverride, false);
   });
 
-  // --- Case 3: scriptId only (no localDir) → fallback ~/gas-projects/<scriptId> ---
+  // --- Case 3: scriptId only (no localDir) → use CWD ---
 
-  it('falls back to ~/gas-projects/<scriptId> when localDir is omitted', async () => {
+  it('defaults to CWD when localDir is omitted', async () => {
     const result = await resolveProject({ scriptId: VALID_SCRIPT_ID });
     assert.equal(result.scriptId, VALID_SCRIPT_ID);
-    assert.ok(result.localDir.includes('gas-projects'));
-    assert.ok(result.localDir.includes(VALID_SCRIPT_ID));
+    assert.equal(result.localDir, process.cwd());
     assert.equal(result.isOverride, false);
   });
 
@@ -197,9 +196,9 @@ describe('resolveProject', () => {
     assert.equal(result.resolvedFrom, 'explicit');
   });
 
-  it('resolvedFrom is "default" when only scriptId provided (no localDir)', async () => {
+  it('resolvedFrom is "explicit" when only scriptId provided (no localDir, CWD used)', async () => {
     const result = await resolveProject({ scriptId: VALID_SCRIPT_ID });
-    assert.equal(result.resolvedFrom, 'default');
+    assert.equal(result.resolvedFrom, 'explicit');
   });
 
   it('resolvedFrom is "explicit" when explicit scriptId overrides .clasp.json', async () => {
