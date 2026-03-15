@@ -58,29 +58,29 @@ The server requests these scopes automatically during login:
 | Tool | Purpose | Key Params |
 |------|---------|------------|
 | `auth` | OAuth login / logout / status | `action` |
+| `create` | Create a new GAS project + bootstrap local directory | `title`, `localDir?`, `parentId?` |
 | `ls` | List files in a GAS project (metadata only) | `scriptId?`, `localDir?`, `path?`, `type?` |
-| `pull` | Download GAS project files to local directory | `scriptId?`, `localDir?`, `reparent?` |
+| `pull` | Download GAS project files to existing local directory | `scriptId?`, `localDir?` |
 | `status` | Compare local vs remote by content hash | `scriptId?`, `localDir?` |
-| `push` | Push local files to GAS with CommonJS validation | `scriptId?`, `localDir?`, `action?` (`push`\|`preview`), `prune?`, `reparent?` |
+| `push` | Push local files to GAS with CommonJS validation | `scriptId?`, `localDir?`, `action?` (`push`\|`preview`), `prune?` |
 | `exec` | Execute a GAS function (auto-pushes first) | `scriptId?`, `localDir?`, `function`, `module?`, `args?` |
 | `deploy` | Deploy / rollback / promote / list-versions | `scriptId?`, `localDir?`, `action` |
 | `projects` | List or search standalone GAS projects | `action`, `query?` |
 | `project_copy` | Copy a GAS project to a new or existing project | `scriptId?`, `localDir?`, `title?`, `destinationScriptId?` |
 | `trigger` | Manage GAS installable triggers | `scriptId?`, `localDir?`, `action` |
 
-> **`scriptId` is optional** when `localDir` contains a `.clasp.json` file. Pull and push create `.clasp.json` automatically. Pass `reparent=true` to update `.clasp.json` when providing a different scriptId.
+> **`scriptId` is optional** when `localDir` contains a `.clasp.json` file. Use the `create` tool to bootstrap new projects (writes `.clasp.json`, initializes git, etc.).
 
 ## Typical Workflow
 
 1. `auth login` — authenticate with Google
-2. `projects list` — find your script ID
-3. `pull` — download project files locally
-4. Edit `.gs` files in your editor
-5. `push action=preview` — show what would change (add/update/preserve/prune) without modifying GAS
-6. `push` — sync back to GAS (validates CommonJS structure; writes `.clasp.json` and updates `.gitignore` automatically)
-7. `exec` — run a function remotely
-8. `deploy action=deploy` — create a versioned staging deployment
-9. `deploy action=promote` — promote staging to production
+2. `create title="My Project"` — create a new GAS project + bootstrap local directory (or `projects list` → `pull` for existing projects)
+3. Edit `.gs` files in your editor
+4. `push action=preview` — show what would change (add/update/preserve/prune) without modifying GAS
+5. `push` — sync back to GAS (validates CommonJS structure)
+6. `exec` — run a function remotely
+7. `deploy action=deploy` — create a versioned staging deployment
+8. `deploy action=promote` — promote staging to production
 
 ## Architecture
 
