@@ -40,7 +40,6 @@ export interface PushResult {
   gitArchived?: boolean;
   archivedFiles?: string[];
   preview?: PushPreviewResult;
-  claspResult?: EnsureClaspResult;
 }
 
 export interface PushPreviewResult {
@@ -502,17 +501,26 @@ export async function getStatus(
 
 /**
  * Pull all files from GAS to local directory.
- * Creates the directory if it doesn't exist. Writes files AS-IS.
- * Cleans up orphaned .gas-sync-state.json on first pull after upgrade.
+ * Directory must already exist — use `create` tool to bootstrap new projects.
+ * Writes files AS-IS without modifying .clasp.json or git state.
  */
 export async function pull(
   scriptId: string,
   localDir: string,
   fileOps: GASFileOperations
 ): Promise<PullResult> {
+  // Directory must already exist
   try {
-    await fs.mkdir(localDir, { recursive: true });
+    await fs.access(localDir);
+  } catch {
+    return {
+      success: false,
+      filesPulled: [],
+      error: `Directory does not exist: ${localDir}. Run create first or mkdir manually.`,
+    };
+  }
 
+  try {
     const remoteFiles = await fileOps.getProjectFiles(scriptId);
     const pulled: string[] = [];
 
@@ -524,22 +532,6 @@ export async function pull(
       await fs.mkdir(path.dirname(filePath), { recursive: true });
       await fs.writeFile(filePath, file.source ?? '', 'utf-8');
       pulled.push(filename);
-    }
-
-    // One-time cleanup: remove orphaned state file from pre-simplification versions.
-    try { await fs.unlink(path.join(localDir, '.gas-sync-state.json')); } catch { /* ENOENT is fine */ }
-
-    // Auto-init git if not already (best-effort — failure does not fail the pull)
-    try {
-      await fs.access(path.join(localDir, '.git'));
-    } catch {
-      try {
-        await execFileAsync('git', ['init', '-b', 'main'], { cwd: localDir, timeout: 10000 });
-        await execFileAsync('git', ['add', '-A'], { cwd: localDir, timeout: 10000 });
-        await execFileAsync('git', ['commit', '-m', 'Initial pull from GAS'], { cwd: localDir, timeout: 10000 });
-      } catch {
-        /* git not available or init failed — non-fatal, files are already written */
-      }
     }
 
     return { success: true, filesPulled: pulled };
@@ -566,7 +558,7 @@ export async function push(
   scriptId: string,
   localDir: string,
   fileOps: GASFileOperations,
-  options: { dryRun?: boolean; skipValidation?: boolean; prune?: boolean; reparent?: boolean } = {}
+  options: { dryRun?: boolean; skipValidation?: boolean; prune?: boolean } = {}
 ): Promise<PushResult> {
   return withPushLock(scriptId, async () => {
     try {
@@ -648,9 +640,8 @@ export async function push(
       }
 
       await fileOps.updateProjectFiles(scriptId, orderedFiles);
-      const claspResult = await ensureClaspFiles(localDir, scriptId, options.reparent);
 
-      return { success: true, filesPushed: allLocalNames, mergeSkipped, gitArchived, archivedFiles, claspResult };
+      return { success: true, filesPushed: allLocalNames, mergeSkipped, gitArchived, archivedFiles };
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
       return { success: false, filesPushed: [], error: message };
