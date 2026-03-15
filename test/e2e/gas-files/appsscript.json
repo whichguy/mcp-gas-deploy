@@ -5,5 +5,9 @@
   "webapp": {
     "executeAs": "USER_DEPLOYING",
     "access": "ANYONE"
-  }
+  },
+  "oauthScopes": [
+    "https://www.googleapis.com/auth/script.scriptapp",
+    "https://www.googleapis.com/auth/script.external_request"
+  ]
 }

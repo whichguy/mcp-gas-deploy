@@ -98,7 +98,7 @@ function isValidEnum<T extends string>(value: string, allowed: readonly T[]): va
 // The __mcp_exec.gs handler serializes the return value to JSON, so we avoid double-stringifying.
 
 function buildListIife(detailed: boolean): string {
-  return `(function() {
+  return `return (function() {
   try {
     var triggers = ScriptApp.getProjectTriggers();
     var result = triggers.map(function(t) {
@@ -119,7 +119,7 @@ function buildListIife(detailed: boolean): string {
 }
 
 function buildDeleteAllIife(): string {
-  return `(function() {
+  return `return (function() {
   try {
     var triggers = ScriptApp.getProjectTriggers();
     var count = triggers.length;
@@ -136,7 +136,7 @@ function buildDeleteAllIife(): string {
 function buildDeleteByIdIife(triggerId: string): string {
   // escapeGasString prevents injection via triggerId
   const safeId = escapeGasString(triggerId);
-  return `(function() {
+  return `return (function() {
   try {
     var triggers = ScriptApp.getProjectTriggers();
     var found = false;
@@ -158,7 +158,7 @@ function buildDeleteByIdIife(triggerId: string): string {
 function buildDeleteByFunctionIife(functionName: string): string {
   // escapeGasString prevents injection via functionName
   const safeName = escapeGasString(functionName);
-  return `(function() {
+  return `return (function() {
   try {
     var triggers = ScriptApp.getProjectTriggers();
     var deleted = 0;
@@ -215,7 +215,7 @@ function buildTimeCreateIife(params: TriggerToolParams): string {
     chain += `.inTimezone('${escapeGasString(timezone)}')`;
   }
 
-  return `(function() {
+  return `return (function() {
   try {
     var trigger = ${chain}.create();
     return {
@@ -247,7 +247,7 @@ function buildSpreadsheetCreateIife(params: TriggerToolParams): string {
     case 'onSelectionChange': chain += '.onSelectionChange()'; break;
   }
 
-  return `(function() {
+  return `return (function() {
   try {
     var trigger = ${chain}.create();
     return {
@@ -274,7 +274,7 @@ function buildFormCreateIife(params: TriggerToolParams): string {
     case 'onFormOpen': chain += '.onOpen()'; break;
   }
 
-  return `(function() {
+  return `return (function() {
   try {
     var trigger = ${chain}.create();
     return {
@@ -298,7 +298,7 @@ function buildCalendarCreateIife(params: TriggerToolParams): string {
       : `CalendarApp.getCalendarById('${escapeGasString(params.calendarId)}')`)
     : 'CalendarApp.getDefaultCalendar()';
 
-  return `(function() {
+  return `return (function() {
   try {
     var trigger = ScriptApp.newTrigger('${safeFn}').forCalendar(${calRef}).onEventUpdated().create();
     return {
@@ -318,7 +318,7 @@ function buildDocumentCreateIife(params: TriggerToolParams): string {
   const safeFn = escapeGasString(params.functionName!);
   const safeDocId = escapeGasString(params.documentId!);
 
-  return `(function() {
+  return `return (function() {
   try {
     var trigger = ScriptApp.newTrigger('${safeFn}').forDocument(DocumentApp.openById('${safeDocId}')).onOpen().create();
     return {
