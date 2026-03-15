@@ -180,4 +180,95 @@ describe('handlePullTool', () => {
     assert.equal(result.success, true);
     assert.equal(result.localDir, tmpDir, 'localDir should equal the provided targetDir');
   });
+
+  // --- .clasp.json resolution ---
+
+  it('reads scriptId from .clasp.json when scriptId is omitted', async () => {
+    await fs.writeFile(
+      path.join(tmpDir, '.clasp.json'),
+      JSON.stringify({ scriptId: VALID_SCRIPT_ID }),
+      'utf-8'
+    );
+
+    const result = await handlePullTool(
+      { localDir: tmpDir, dryRun: true },
+      makeFileOps([gasFile('main')]),
+    );
+
+    assert.equal(result.success, true);
+    assert.equal(result.localDir, tmpDir);
+    assert.equal(result.filesPulled.length, 1);
+  });
+
+  it('writes .clasp.json after successful pull', async () => {
+    const result = await handlePullTool(
+      { scriptId: VALID_SCRIPT_ID, localDir: tmpDir },
+      makeFileOps([gasFile('main')]),
+    );
+
+    assert.equal(result.success, true);
+
+    // .clasp.json should be written
+    const claspContent = await fs.readFile(path.join(tmpDir, '.clasp.json'), 'utf-8');
+    const clasp = JSON.parse(claspContent);
+    assert.equal(clasp.scriptId, VALID_SCRIPT_ID);
+  });
+
+  it('does NOT update .clasp.json when it already exists (unless reparent)', async () => {
+    const existingScriptId = 'existingscriptidxxx1234567890';
+    await fs.writeFile(
+      path.join(tmpDir, '.clasp.json'),
+      JSON.stringify({ scriptId: existingScriptId }),
+      'utf-8'
+    );
+
+    await handlePullTool(
+      { scriptId: VALID_SCRIPT_ID, localDir: tmpDir },
+      makeFileOps([gasFile('main')]),
+    );
+
+    // .clasp.json should still have the original scriptId
+    const claspContent = await fs.readFile(path.join(tmpDir, '.clasp.json'), 'utf-8');
+    const clasp = JSON.parse(claspContent);
+    assert.equal(clasp.scriptId, existingScriptId, '.clasp.json should not be overwritten without reparent');
+  });
+
+  it('updates .clasp.json when reparent=true', async () => {
+    const existingScriptId = 'existingscriptidxxx1234567890';
+    await fs.writeFile(
+      path.join(tmpDir, '.clasp.json'),
+      JSON.stringify({ scriptId: existingScriptId }),
+      'utf-8'
+    );
+
+    await handlePullTool(
+      { scriptId: VALID_SCRIPT_ID, localDir: tmpDir, reparent: true },
+      makeFileOps([gasFile('main')]),
+    );
+
+    // .clasp.json should now have the new scriptId
+    const claspContent = await fs.readFile(path.join(tmpDir, '.clasp.json'), 'utf-8');
+    const clasp = JSON.parse(claspContent);
+    assert.equal(clasp.scriptId, VALID_SCRIPT_ID, '.clasp.json should be updated with reparent=true');
+  });
+
+  it('returns error when neither scriptId nor .clasp.json is available', async () => {
+    const result = await handlePullTool(
+      { localDir: tmpDir },
+      makeFileOps([]),
+    );
+
+    assert.equal(result.success, false);
+    assert.ok(result.error?.includes('No scriptId provided'), `got: ${result.error}`);
+  });
+
+  it('accepts localDir as alias for targetDir', async () => {
+    const result = await handlePullTool(
+      { scriptId: VALID_SCRIPT_ID, localDir: tmpDir, dryRun: true },
+      makeFileOps([gasFile('main')]),
+    );
+
+    assert.equal(result.success, true);
+    assert.equal(result.localDir, tmpDir);
+  });
 });

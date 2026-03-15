@@ -510,4 +510,40 @@ describe('handleTriggerTool', () => {
     assert.equal(result.success, false);
     assert.ok(result.error?.includes('spreadsheetEvent'));
   });
+
+  // --- .clasp.json resolution ---
+
+  it('reads scriptId from .clasp.json when scriptId is omitted', async () => {
+    await fs.writeFile(
+      path.join(tmpDir, '.clasp.json'),
+      JSON.stringify({ scriptId: VALID_SCRIPT_ID }),
+      'utf-8'
+    );
+    sinon.stub(globalThis, 'fetch').resolves(
+      makeFetchResponse({
+        status: 200,
+        json: {
+          success: true,
+          result: { success: true, triggers: [], totalTriggers: 0 },
+        },
+      }),
+    );
+
+    const result = await handleTriggerTool(
+      { action: 'list', localDir: tmpDir },
+      makeSession(), makeDeployOps(),
+    );
+
+    assert.equal(result.success, true, `expected success, got: ${result.error}`);
+  });
+
+  it('returns error when neither scriptId nor .clasp.json is available', async () => {
+    const result = await handleTriggerTool(
+      { action: 'list', localDir: tmpDir },
+      makeSession(), makeDeployOps(),
+    );
+
+    assert.equal(result.success, false);
+    assert.ok(result.error?.includes('No scriptId provided'), `got: ${result.error}`);
+  });
 });

@@ -295,3 +295,47 @@ describe('handlePushTool action=preview', () => {
     assert.ok(result.error, 'error should be set');
   });
 });
+
+describe('handlePushTool — .clasp.json resolution', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    const base = path.join(os.homedir(), '.cache', 'mcp-gas-deploy-test');
+    await fs.mkdir(base, { recursive: true });
+    tmpDir = await fs.mkdtemp(path.join(base, 'push-clasp-'));
+  });
+
+  afterEach(async () => {
+    sinon.restore();
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('reads scriptId from .clasp.json when scriptId is omitted', async () => {
+    await fs.writeFile(
+      path.join(tmpDir, '.clasp.json'),
+      JSON.stringify({ scriptId: VALID_SCRIPT_ID }),
+      'utf-8'
+    );
+    await fs.writeFile(path.join(tmpDir, 'main.gs'), VALID_GS_CONTENT, 'utf-8');
+
+    const result = await handlePushTool(
+      { localDir: tmpDir },
+      makeFileOps(),
+    );
+
+    assert.equal(result.success, true, `expected success, got: ${result.error}`);
+    assert.ok(result.filesPushed.length > 0);
+  });
+
+  it('returns error when neither scriptId nor .clasp.json is available', async () => {
+    await fs.writeFile(path.join(tmpDir, 'main.gs'), VALID_GS_CONTENT, 'utf-8');
+
+    const result = await handlePushTool(
+      { localDir: tmpDir },
+      makeFileOps(),
+    );
+
+    assert.equal(result.success, false);
+    assert.ok(result.error?.includes('No scriptId provided'), `got: ${result.error}`);
+  });
+});
