@@ -678,6 +678,14 @@ async function handleDelete(params: TriggerToolParams, headUrl: string, token: s
     };
   }
 
+  if (functionName && !FUNCTION_PATTERN.test(functionName)) {
+    return {
+      success: false, action: 'delete',
+      error: 'Invalid functionName format',
+      hints: { fix: 'functionName must be a valid JavaScript identifier (letters, digits, _, $)' },
+    };
+  }
+
   let iife: string;
   if (deleteAll) {
     iife = buildDeleteAllIife();
