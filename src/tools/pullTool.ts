@@ -102,15 +102,26 @@ export async function handlePullTool(
   }
 
   if (dryRun) {
-    const remoteFiles = await fileOps.getProjectFiles(scriptId);
-    return {
-      success: true,
-      filesPulled: remoteFiles.map(f => f.name),
-      localDir: resolvedDir,
-      hints: {
-        next: `Run pull without dryRun to write ${remoteFiles.length} files to ${resolvedDir}`,
-      },
-    };
+    try {
+      const remoteFiles = await fileOps.getProjectFiles(scriptId);
+      return {
+        success: true,
+        filesPulled: remoteFiles.map(f => f.name),
+        localDir: resolvedDir,
+        hints: {
+          next: `Run pull without dryRun to write ${remoteFiles.length} files to ${resolvedDir}`,
+        },
+      };
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        success: false,
+        filesPulled: [],
+        localDir: resolvedDir,
+        error: `Failed to list remote files: ${message}`,
+        hints: { fix: 'Check authentication and that the scriptId is valid' },
+      };
+    }
   }
 
   const result = await pull(scriptId, resolvedDir, fileOps);

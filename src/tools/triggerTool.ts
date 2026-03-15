@@ -471,6 +471,14 @@ export async function handleTriggerTool(
       ? path.resolve(params.localDir)
       : path.join(os.homedir(), 'gas-projects', scriptId);
 
+    if (params.localDir && !resolvedDir.startsWith(os.homedir() + path.sep)) {
+      return {
+        success: false, action,
+        error: 'localDir must resolve within your home directory',
+        hints: { fix: 'Use an absolute path within your home directory or omit localDir' },
+      };
+    }
+
     let headUrl: string | undefined;
     try {
       const deployInfo = await getDeploymentInfo(resolvedDir, scriptId);

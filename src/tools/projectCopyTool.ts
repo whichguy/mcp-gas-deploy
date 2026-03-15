@@ -195,7 +195,7 @@ export async function handleProjectCopyTool(
       targetScriptId,
       mode,
       title: targetTitle,
-      filesCopied: sourceFiles.length,
+      filesCopied: orderedFiles.length,
       sourceScriptId: scriptId,
       warnings,
       hints: {
