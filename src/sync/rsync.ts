@@ -290,14 +290,29 @@ function computePreview(
   return { toAdd, toUpdate, toPreserve, toPrune, totalFilesAfterPush };
 }
 
-/** Write .clasp.json and ensure .gitignore lists it. Non-fatal — errors do not fail the push. */
-async function ensureClaspFiles(localDir: string, scriptId: string): Promise<void> {
+/**
+ * Write .clasp.json and ensure .gitignore lists it. Non-fatal — errors do not fail the caller.
+ *
+ * @param reparent When false (default), only writes .clasp.json if it doesn't exist.
+ *                 When true, overwrites .clasp.json even if it exists (re-associates the directory).
+ */
+export async function ensureClaspFiles(localDir: string, scriptId: string, reparent?: boolean): Promise<void> {
   try {
-    await fs.writeFile(
-      path.join(localDir, '.clasp.json'),
-      JSON.stringify({ scriptId }, null, 2) + '\n',
-      'utf-8'
-    );
+    const claspPath = path.join(localDir, '.clasp.json');
+    // Only write if file doesn't exist OR reparent is explicitly true
+    let shouldWrite = !!reparent;
+    if (!shouldWrite) {
+      try {
+        await fs.access(claspPath);
+        // File exists and reparent is false — do not overwrite
+      } catch {
+        // File does not exist — safe to write
+        shouldWrite = true;
+      }
+    }
+    if (shouldWrite) {
+      await fs.writeFile(claspPath, JSON.stringify({ scriptId }, null, 2) + '\n', 'utf-8');
+    }
   } catch { /* non-fatal */ }
 
   try {
@@ -354,7 +369,8 @@ async function gitArchiveRemoteOnly(
     // Write each remote-only file to disk with correct extension
     for (const file of remoteOnlyFiles) {
       const ext = getExtension(file.type);
-      const filename = `${file.name}${ext}`;
+      // Double-extension guard: foo.gs stays foo.gs, not foo.gs.gs
+      const filename = file.name.endsWith(ext) ? file.name : `${file.name}${ext}`;
       const filePath = path.join(localDir, filename);
       await fs.mkdir(path.dirname(filePath), { recursive: true });
       // Guard: remoteOnlyFiles filter should prevent this, but never overwrite local files
@@ -489,7 +505,8 @@ export async function pull(
 
     for (const file of remoteFiles) {
       const ext = getExtension(file.type);
-      const filename = `${file.name}${ext}`;
+      // Double-extension guard: foo.gs stays foo.gs, not foo.gs.gs
+      const filename = file.name.endsWith(ext) ? file.name : `${file.name}${ext}`;
       const filePath = path.join(localDir, filename);
       await fs.mkdir(path.dirname(filePath), { recursive: true });
       await fs.writeFile(filePath, file.source ?? '', 'utf-8');
@@ -536,7 +553,7 @@ export async function push(
   scriptId: string,
   localDir: string,
   fileOps: GASFileOperations,
-  options: { dryRun?: boolean; skipValidation?: boolean; prune?: boolean } = {}
+  options: { dryRun?: boolean; skipValidation?: boolean; prune?: boolean; reparent?: boolean } = {}
 ): Promise<PushResult> {
   return withPushLock(scriptId, async () => {
     try {
@@ -618,7 +635,7 @@ export async function push(
       }
 
       await fileOps.updateProjectFiles(scriptId, orderedFiles);
-      await ensureClaspFiles(localDir, scriptId);
+      await ensureClaspFiles(localDir, scriptId, options.reparent);
 
       return { success: true, filesPushed: allLocalNames, mergeSkipped, gitArchived, archivedFiles };
     } catch (error: unknown) {

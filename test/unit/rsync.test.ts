@@ -1317,4 +1317,75 @@ describe('ensureClaspFiles (via push)', () => {
 
     assert.equal(result.success, true, 'push must succeed even if .clasp.json write fails');
   });
+
+  it('.clasp.json NOT overwritten when it already exists (reparent default)', async () => {
+    const existingId = 'existingscriptid1234567890';
+    await fs.writeFile(
+      path.join(tmpDir, '.clasp.json'),
+      JSON.stringify({ scriptId: existingId }),
+      'utf-8'
+    );
+    await fs.writeFile(path.join(tmpDir, 'main.gs'), validGs, 'utf-8');
+    const fileOps = makeFileOps([]);
+
+    await push(SCRIPT_ID, tmpDir, fileOps, { skipValidation: true });
+
+    const clasp = JSON.parse(await fs.readFile(path.join(tmpDir, '.clasp.json'), 'utf-8'));
+    assert.equal(clasp.scriptId, existingId, '.clasp.json should preserve existing scriptId');
+  });
+});
+
+// --- pull — double-extension guard ---
+
+describe('pull — double-extension guard', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'rsync-dblext-'));
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+    sinon.restore();
+  });
+
+  it('file named "foo.gs" does not become "foo.gs.gs"', async () => {
+    const fileOps = makeFileOps([
+      { name: 'foo.gs', source: '// already has ext', type: 'SERVER_JS' },
+    ]);
+
+    const result = await pull('scriptId', tmpDir, fileOps);
+
+    assert.ok(result.success);
+    // Should be foo.gs, not foo.gs.gs
+    assert.ok(result.filesPulled.includes('foo.gs'), `expected foo.gs, got: ${result.filesPulled}`);
+    assert.ok(!result.filesPulled.includes('foo.gs.gs'), 'should NOT have double extension');
+    const content = await fs.readFile(path.join(tmpDir, 'foo.gs'), 'utf-8');
+    assert.equal(content, '// already has ext');
+  });
+
+  it('file named "utils" gets .gs extension added normally', async () => {
+    const fileOps = makeFileOps([
+      gasFile('utils', '// utils code'),
+    ]);
+
+    const result = await pull('scriptId', tmpDir, fileOps);
+
+    assert.ok(result.success);
+    assert.ok(result.filesPulled.includes('utils.gs'));
+    const content = await fs.readFile(path.join(tmpDir, 'utils.gs'), 'utf-8');
+    assert.equal(content, '// utils code');
+  });
+
+  it('HTML file named "sidebar.html" does not become "sidebar.html.html"', async () => {
+    const fileOps = makeFileOps([
+      { name: 'sidebar.html', source: '<html></html>', type: 'HTML' },
+    ]);
+
+    const result = await pull('scriptId', tmpDir, fileOps);
+
+    assert.ok(result.success);
+    assert.ok(result.filesPulled.includes('sidebar.html'), `expected sidebar.html, got: ${result.filesPulled}`);
+    assert.ok(!result.filesPulled.includes('sidebar.html.html'), 'should NOT have double extension');
+  });
 });

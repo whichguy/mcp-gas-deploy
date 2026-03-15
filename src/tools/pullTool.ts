@@ -2,20 +2,22 @@
  * Pull Tool for mcp-gas-deploy
  *
  * Fetches all GAS files to a local directory. Auto-initializes git.
+ * Writes .clasp.json after pull so the directory is self-describing.
  */
 
-import path from 'node:path';
-import os from 'node:os';
 import { GASFileOperations } from '../api/gasFileOperations.js';
-import { pull } from '../sync/rsync.js';
-import { SCRIPT_ID_PATTERN } from '../utils/validation.js';
+import { pull, ensureClaspFiles } from '../sync/rsync.js';
+import { resolveProject } from '../utils/resolveProject.js';
 import { SchemaFragments } from '../utils/schemaFragments.js';
 import { GuidanceFragments } from '../utils/guidanceFragments.js';
 
 export interface PullToolParams {
-  scriptId: string;
+  scriptId?: string;
+  localDir?: string;
+  /** @deprecated Use localDir instead. Accepted as alias for backward compatibility. */
   targetDir?: string;
   dryRun?: boolean;
+  reparent?: boolean;
 }
 
 export interface PullToolResult {
@@ -40,16 +42,22 @@ export const PULL_TOOL_DEFINITION = {
     type: 'object' as const,
     properties: {
       ...SchemaFragments.scriptId,
+      localDir: {
+        type: 'string',
+        description: 'Local directory to write files to (default: ~/gas-projects/<scriptId>). If it contains .clasp.json, scriptId is read from it.',
+      },
       targetDir: {
         type: 'string',
-        description: 'Local directory to write files to (default: ~/gas-projects/<scriptId>)',
+        description: 'Deprecated — use localDir instead. Accepted as alias for backward compatibility.',
       },
       ...SchemaFragments.dryRun,
+      ...SchemaFragments.reparent,
     },
-    required: ['scriptId'],
+    required: [],
     additionalProperties: false,
     llmGuidance: {
       commonJs: GuidanceFragments.commonJsPattern,
+      resolution: GuidanceFragments.claspResolution,
       dryRun: 'Use dryRun: true to preview which files will be written without modifying the filesystem.',
       gitInit: 'Pull auto-initializes a git repo in the target directory for version tracking.',
       errorRecovery: GuidanceFragments.errorRecovery,
@@ -72,34 +80,25 @@ export async function handlePullTool(
   params: PullToolParams,
   fileOps: GASFileOperations
 ): Promise<PullToolResult> {
-  const { scriptId, targetDir, dryRun } = params;
+  const { dryRun, reparent } = params;
+  // Accept targetDir as deprecated alias for localDir
+  const localDir = params.localDir ?? params.targetDir;
 
-  if (!SCRIPT_ID_PATTERN.test(scriptId)) {
+  let resolved;
+  try {
+    resolved = await resolveProject({ scriptId: params.scriptId, localDir });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
     return {
       success: false,
       filesPulled: [],
       localDir: '',
-      error: 'Invalid scriptId format',
-      hints: { fix: 'scriptId must be 20+ alphanumeric characters, hyphens, or underscores' },
+      error: message,
+      hints: { fix: 'Provide scriptId explicitly, or point localDir to a directory with .clasp.json.' },
     };
   }
 
-  // Resolve local directory — prevent path traversal
-  const baseDir = path.join(os.homedir(), 'gas-projects');
-  const resolvedDir = targetDir
-    ? path.resolve(targetDir)
-    : path.join(baseDir, scriptId);
-
-  // Guard against path traversal via targetDir
-  if (targetDir && !resolvedDir.startsWith(os.homedir() + path.sep)) {
-    return {
-      success: false,
-      filesPulled: [],
-      localDir: '',
-      error: 'targetDir must resolve within your home directory',
-      hints: { fix: 'Use an absolute path within your home directory or omit targetDir' },
-    };
-  }
+  const { scriptId, localDir: resolvedDir } = resolved;
 
   if (dryRun) {
     try {
@@ -135,6 +134,9 @@ export async function handlePullTool(
       hints: { fix: 'Check that the scriptId is valid and you have access to the project' },
     };
   }
+
+  // Write .clasp.json so the directory is self-describing for future operations
+  await ensureClaspFiles(resolvedDir, scriptId, reparent);
 
   return {
     success: true,

@@ -5,9 +5,12 @@
  * sort order, size field, error handling. GASFileOperations is mocked via sinon.
  */
 
-import { describe, it, afterEach } from 'mocha';
+import { describe, it, beforeEach, afterEach } from 'mocha';
 import { strict as assert } from 'node:assert';
 import sinon from 'sinon';
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
 import { handleLsTool } from '../../src/tools/lsTool.js';
 import type { GASFileOperations } from '../../src/api/gasFileOperations.js';
 import type { GASFile } from '../../src/api/gasTypes.js';
@@ -213,5 +216,47 @@ describe('handleLsTool', () => {
     assert.equal(result.success, false);
     assert.ok(result.error?.includes('401'), `got: ${result.error}`);
     assert.ok(result.hints.fix?.includes('auth'), `hint should mention auth, got: ${result.hints.fix}`);
+  });
+
+  // --- .clasp.json resolution ---
+
+  describe('.clasp.json resolution', () => {
+    let tmpDir: string;
+
+    beforeEach(async () => {
+      const base = path.join(os.homedir(), '.cache', 'mcp-gas-deploy-test');
+      await fs.mkdir(base, { recursive: true });
+      tmpDir = await fs.mkdtemp(path.join(base, 'ls-clasp-'));
+    });
+
+    afterEach(async () => {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    });
+
+    it('reads scriptId from .clasp.json when scriptId is omitted', async () => {
+      await fs.writeFile(
+        path.join(tmpDir, '.clasp.json'),
+        JSON.stringify({ scriptId: VALID_SCRIPT_ID }),
+        'utf-8'
+      );
+
+      const result = await handleLsTool(
+        { localDir: tmpDir },
+        makeFileOps([gasFile('main')]),
+      );
+
+      assert.equal(result.success, true);
+      assert.equal(result.count, 1);
+    });
+
+    it('returns error when neither scriptId nor .clasp.json is available', async () => {
+      const result = await handleLsTool(
+        { localDir: tmpDir },
+        makeFileOps([]),
+      );
+
+      assert.equal(result.success, false);
+      assert.ok(result.error?.includes('No scriptId provided'), `got: ${result.error}`);
+    });
   });
 });

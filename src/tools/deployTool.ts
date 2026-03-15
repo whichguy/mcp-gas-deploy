@@ -10,9 +10,8 @@
  * Stores deployment URLs and active versionNumbers in gas-deploy.json.
  */
 
-import path from 'node:path';
-import os from 'node:os';
 import { promises as fs } from 'node:fs';
+import path from 'node:path';
 import { GASFileOperations } from '../api/gasFileOperations.js';
 import { GASDeployOperations } from '../api/gasDeployOperations.js';
 import { push } from '../sync/rsync.js';
@@ -22,9 +21,9 @@ import {
   type DeploymentInfo,
   STALE_THRESHOLD_MS,
 } from '../config/deployConfig.js';
-import { SCRIPT_ID_PATTERN } from '../utils/validation.js';
 import { generateShimCode, validateUserSymbol, buildConsumerManifest } from '../utils/consumerShim.js';
 import { buildHintContext } from '../utils/hintContext.js';
+import { resolveProject } from '../utils/resolveProject.js';
 import { SchemaFragments } from '../utils/schemaFragments.js';
 import { GuidanceFragments } from '../utils/guidanceFragments.js';
 
@@ -63,7 +62,7 @@ async function ensureWebAppManifest(localDir: string): Promise<void> {
 }
 
 export interface DeployToolParams {
-  scriptId: string;
+  scriptId?: string;
   localDir?: string;
   action?: 'deploy' | 'list-versions' | 'rollback' | 'promote';
   to?: 'staging' | 'prod';
@@ -130,11 +129,12 @@ export const DEPLOY_TOOL_DEFINITION = {
         description: 'Version description (deploy action only, default: auto-generated)',
       },
     },
-    required: ['scriptId'],
+    required: [],
     additionalProperties: false,
     llmGuidance: {
       circularBuffer: GuidanceFragments.circularBuffer,
       workflow: GuidanceFragments.deployWorkflow,
+      resolution: GuidanceFragments.claspResolution,
       rollback: 'action=rollback to="staging"|"prod" — steps back one slot in the circular buffer. Instant, no file push. Stops at oldest slot.',
       promote: 'action=promote — always staging→prod. Re-points prod deployment to current staging version.',
       versionLimit: 'GAS allows max 200 versions per project. Use list-versions to check budget.',
@@ -270,27 +270,21 @@ export async function handleDeployTool(
   fileOps: GASFileOperations,
   deployOps: GASDeployOperations
 ): Promise<DeployToolResult> {
-  const { scriptId, localDir, action = 'deploy', to, description } = params;
+  const { action = 'deploy', to, description } = params;
 
-  if (!SCRIPT_ID_PATTERN.test(scriptId)) {
+  let resolved;
+  try {
+    resolved = await resolveProject({ scriptId: params.scriptId, localDir: params.localDir });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
     return {
       success: false, action,
-      error: 'Invalid scriptId format',
-      hints: { fix: 'scriptId must be 20+ alphanumeric characters, hyphens, or underscores' },
+      error: message,
+      hints: { fix: 'Provide scriptId explicitly, or point localDir to a directory with .clasp.json.' },
     };
   }
 
-  const resolvedDir = localDir
-    ? path.resolve(localDir)
-    : path.join(os.homedir(), 'gas-projects', scriptId);
-
-  if (localDir && !resolvedDir.startsWith(os.homedir() + path.sep)) {
-    return {
-      success: false, action,
-      error: 'localDir must resolve within your home directory',
-      hints: { fix: 'Use an absolute path within your home directory or omit localDir' },
-    };
-  }
+  const { scriptId, localDir: resolvedDir } = resolved;
 
   // --- action: list-versions ---
   if (action === 'list-versions') {
@@ -443,7 +437,7 @@ export async function handleDeployTool(
         error: `Rollback failed: ${message}`,
         hints: {
           fix: 'Check authentication and project permissions.',
-          context: buildHintContext(deployInfo, to),
+          context: buildHintContext(deployInfo ?? {}, to),
         },
       };
     }
@@ -597,7 +591,7 @@ export async function handleDeployTool(
         error: `Promote failed: ${message}`,
         hints: {
           fix: `Check authentication. Staging v${deployInfo?.stagingVersionNumber ?? '?'} → prod deployment ${deployInfo?.prodDeploymentId ?? '?'}.`,
-          context: buildHintContext(deployInfo),
+          context: buildHintContext(deployInfo ?? {}),
         },
       };
     }
@@ -788,7 +782,7 @@ export async function handleDeployTool(
       error: `Deploy failed: ${message}`,
       hints: {
         fix: 'Check authentication and project permissions. If deploy failed after version creation, re-run action=deploy to re-pin.',
-        context: buildHintContext(deployInfo, 'staging'),
+        context: buildHintContext(deployInfo ?? {}, 'staging'),
       },
     };
   }

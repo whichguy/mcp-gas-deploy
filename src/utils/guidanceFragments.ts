@@ -40,6 +40,13 @@ export class GuidanceFragments {
     'Max 20 triggers per user per script.',
   ].join('\n');
 
+  static readonly claspResolution = [
+    'scriptId is optional when localDir contains .clasp.json.',
+    'Resolution cascade: (1) localDir + .clasp.json → read scriptId (explicit scriptId overrides); (2) localDir + explicit scriptId → use explicit; (3) no localDir + explicit scriptId → fallback ~/gas-projects/<scriptId>; (4) neither → error.',
+    'Pull and push create .clasp.json automatically.',
+    'Pass reparent=true to update .clasp.json when providing a different scriptId.',
+  ].join('\n');
+
   static readonly propertiesCopyWorkflow = [
     'Script properties are NOT copied automatically. To copy them:',
     '1. exec in SOURCE project: require("runner-api").getScriptProperties() — returns all key/value pairs.',

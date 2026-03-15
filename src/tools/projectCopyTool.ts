@@ -21,12 +21,14 @@
 import { GASFileOperations } from '../api/gasFileOperations.js';
 import { GASProjectOperations } from '../api/gasProjectOperations.js';
 import { SCRIPT_ID_PATTERN } from '../utils/validation.js';
+import { resolveProject } from '../utils/resolveProject.js';
 import { orderFilesForPush } from '../sync/rsync.js';
 import { SchemaFragments } from '../utils/schemaFragments.js';
 import { GuidanceFragments } from '../utils/guidanceFragments.js';
 
 export interface ProjectCopyToolParams {
-  scriptId: string;
+  scriptId?: string;
+  localDir?: string;
   title?: string;
   destinationScriptId?: string;
 }
@@ -61,6 +63,7 @@ export const PROJECT_COPY_TOOL_DEFINITION = {
     type: 'object' as const,
     properties: {
       ...SchemaFragments.scriptId,
+      ...SchemaFragments.localDir,
       title: {
         type: 'string',
         description: 'Title for the new project (default: "Copy of <source title>")',
@@ -70,9 +73,10 @@ export const PROJECT_COPY_TOOL_DEFINITION = {
         description: 'Existing GAS project to copy files INTO (overwrites all files). If omitted, a new project is created.',
       },
     },
-    required: ['scriptId'],
+    required: [],
     additionalProperties: false,
     llmGuidance: {
+      resolution: GuidanceFragments.claspResolution,
       propertiesCopy: GuidanceFragments.propertiesCopyWorkflow,
       triggerCopy: 'Triggers are NOT copied. Re-create them in the new project via the trigger tool.',
       containerBound: 'If the source was container-bound (Sheets/Docs), the copy is standalone. Create a new spreadsheet and link it separately.',
@@ -103,15 +107,21 @@ export async function handleProjectCopyTool(
   fileOps: GASFileOperations,
   projectOps: GASProjectOperations
 ): Promise<ProjectCopyToolResult> {
-  const { scriptId, title, destinationScriptId } = params;
+  const { title, destinationScriptId } = params;
 
-  if (!SCRIPT_ID_PATTERN.test(scriptId)) {
+  let resolved;
+  try {
+    resolved = await resolveProject({ scriptId: params.scriptId, localDir: params.localDir });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
     return {
       success: false,
-      error: 'Invalid scriptId format',
-      hints: { fix: 'scriptId must be 20+ alphanumeric characters, hyphens, or underscores' },
+      error: message,
+      hints: { fix: 'Provide scriptId explicitly, or point localDir to a directory with .clasp.json.' },
     };
   }
+
+  const { scriptId } = resolved;
 
   // Self-copy prevention
   if (destinationScriptId && destinationScriptId === scriptId) {

@@ -7,11 +7,13 @@
  */
 
 import type { GASFileOperations } from '../api/gasFileOperations.js';
-import { SCRIPT_ID_PATTERN } from '../utils/validation.js';
+import { resolveProject } from '../utils/resolveProject.js';
 import { SchemaFragments } from '../utils/schemaFragments.js';
+import { GuidanceFragments } from '../utils/guidanceFragments.js';
 
 export interface LsToolParams {
-  scriptId: string;
+  scriptId?: string;
+  localDir?: string;
   path?: string;
   type?: 'SERVER_JS' | 'HTML' | 'JSON';
 }
@@ -48,6 +50,7 @@ export const LS_TOOL_DEFINITION = {
     type: 'object' as const,
     properties: {
       ...SchemaFragments.scriptId,
+      ...SchemaFragments.localDir,
       path: {
         type: 'string',
         description: 'Filter files by name — substring match or regex (e.g. "utils", "^common-js/", ".*test.*")',
@@ -58,9 +61,10 @@ export const LS_TOOL_DEFINITION = {
         description: 'Filter by file type',
       },
     },
-    required: ['scriptId'],
+    required: [],
     additionalProperties: false,
     llmGuidance: {
+      resolution: GuidanceFragments.claspResolution,
       positionMatters: 'Files are sorted by GAS execution position — this determines CommonJS module load order. require.gs must be position 0.',
       typeFilter: 'SERVER_JS = .gs files, HTML = .html templates, JSON = appsscript.json manifest.',
       pathFilter: 'Plain substring by default; auto-detects regex metacharacters (^$.*+?). Max 200 chars.',
@@ -107,15 +111,21 @@ export async function handleLsTool(
   params: LsToolParams,
   fileOps: GASFileOperations,
 ): Promise<LsToolResult> {
-  const { scriptId, path, type } = params;
+  const { path, type } = params;
 
-  if (!SCRIPT_ID_PATTERN.test(scriptId)) {
+  let resolved;
+  try {
+    resolved = await resolveProject({ scriptId: params.scriptId, localDir: params.localDir });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
     return {
       success: false,
-      error: 'Invalid scriptId — must be 20+ alphanumeric characters, hyphens, or underscores.',
-      hints: { fix: 'Check the scriptId and try again. Use projects tool to find valid IDs.' },
+      error: message,
+      hints: { fix: 'Provide scriptId explicitly, or point localDir to a directory with .clasp.json.' },
     };
   }
+
+  const { scriptId } = resolved;
 
   // Validate path length before attempting regex compilation (ReDoS defense).
   if (path && path.length > MAX_PATH_LENGTH) {

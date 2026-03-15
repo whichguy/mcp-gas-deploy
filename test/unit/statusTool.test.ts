@@ -488,4 +488,30 @@ describe('handleStatusTool', () => {
       assert.equal(result.status!.modified[0].name, 'code');
     });
   });
+
+  // --- .clasp.json resolution ---
+
+  describe('.clasp.json resolution', () => {
+    it('reads scriptId from .clasp.json when scriptId is omitted', async () => {
+      await fs.writeFile(
+        path.join(tmpDir, '.clasp.json'),
+        JSON.stringify({ scriptId: VALID_SCRIPT_ID }),
+        'utf-8'
+      );
+      await fs.writeFile(path.join(tmpDir, 'main.gs'), '// main', 'utf-8');
+      const fileOps = makeFileOps([gasFile('main', '// main')]);
+
+      const result = await handleStatusTool({ localDir: tmpDir }, fileOps);
+
+      assert.equal(result.success, true);
+      assert.ok(result.summary.includes('in sync'), `got: ${result.summary}`);
+    });
+
+    it('returns error when neither scriptId nor .clasp.json is available', async () => {
+      const result = await handleStatusTool({ localDir: tmpDir }, makeFileOps([]));
+
+      assert.equal(result.success, false);
+      assert.ok(result.error?.includes('No scriptId provided'), `got: ${result.error}`);
+    });
+  });
 });

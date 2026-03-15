@@ -58,14 +58,17 @@ The server requests these scopes automatically during login:
 | Tool | Purpose | Key Params |
 |------|---------|------------|
 | `auth` | OAuth login / logout / status | `action` |
-| `ls` | List files in a GAS project (metadata only) | `scriptId`, `path?`, `type?` |
-| `pull` | Download GAS project files to local directory | `scriptId`, `targetDir?` |
-| `status` | Compare local vs remote by content hash | `scriptId`, `localDir?` |
-| `push` | Push local files to GAS with CommonJS validation | `scriptId`, `action?` (`push`\|`preview`), `prune?`, `skipValidation?` |
-| `exec` | Execute a GAS function (auto-pushes first) | `scriptId`, `function`, `module?`, `args?` |
-| `deploy` | Deploy / rollback / promote / list-versions | `scriptId`, `action` |
+| `ls` | List files in a GAS project (metadata only) | `scriptId?`, `localDir?`, `path?`, `type?` |
+| `pull` | Download GAS project files to local directory | `scriptId?`, `localDir?`, `reparent?` |
+| `status` | Compare local vs remote by content hash | `scriptId?`, `localDir?` |
+| `push` | Push local files to GAS with CommonJS validation | `scriptId?`, `localDir?`, `action?` (`push`\|`preview`), `prune?`, `reparent?` |
+| `exec` | Execute a GAS function (auto-pushes first) | `scriptId?`, `localDir?`, `function`, `module?`, `args?` |
+| `deploy` | Deploy / rollback / promote / list-versions | `scriptId?`, `localDir?`, `action` |
 | `projects` | List or search standalone GAS projects | `action`, `query?` |
-| `project_copy` | Copy a GAS project to a new standalone project | `scriptId`, `title?` |
+| `project_copy` | Copy a GAS project to a new or existing project | `scriptId?`, `localDir?`, `title?`, `destinationScriptId?` |
+| `trigger` | Manage GAS installable triggers | `scriptId?`, `localDir?`, `action` |
+
+> **`scriptId` is optional** when `localDir` contains a `.clasp.json` file. Pull and push create `.clasp.json` automatically. Pass `reparent=true` to update `.clasp.json` when providing a different scriptId.
 
 ## Typical Workflow
 

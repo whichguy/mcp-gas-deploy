@@ -6,9 +6,12 @@
  * GASFileOperations and GASProjectOperations are mocked via sinon.
  */
 
-import { describe, it, afterEach } from 'mocha';
+import { describe, it, beforeEach, afterEach } from 'mocha';
 import { strict as assert } from 'node:assert';
 import sinon from 'sinon';
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
 import { handleProjectCopyTool } from '../../src/tools/projectCopyTool.js';
 import type { GASFileOperations } from '../../src/api/gasFileOperations.js';
 import type { GASProjectOperations } from '../../src/api/gasProjectOperations.js';
@@ -383,5 +386,49 @@ describe('handleProjectCopyTool', () => {
     const allWarnings = result.warnings!.join(' ');
     assert.ok(allWarnings.includes('overwritten'), `should warn about overwritten files, got: ${allWarnings}`);
     assert.ok(allWarnings.includes('properties'), `should mention properties preserved, got: ${allWarnings}`);
+  });
+
+  // --- .clasp.json resolution ---
+
+  describe('.clasp.json resolution', () => {
+    let tmpDir: string;
+
+    beforeEach(async () => {
+      const base = path.join(os.homedir(), '.cache', 'mcp-gas-deploy-test');
+      await fs.mkdir(base, { recursive: true });
+      tmpDir = await fs.mkdtemp(path.join(base, 'copy-clasp-'));
+    });
+
+    afterEach(async () => {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    });
+
+    it('reads scriptId from .clasp.json when scriptId is omitted', async () => {
+      await fs.writeFile(
+        path.join(tmpDir, '.clasp.json'),
+        JSON.stringify({ scriptId: VALID_SCRIPT_ID }),
+        'utf-8'
+      );
+
+      const result = await handleProjectCopyTool(
+        { localDir: tmpDir },
+        makeFileOps([gasFile('main')]),
+        makeProjectOps(),
+      );
+
+      assert.equal(result.success, true, `expected success, got: ${result.error}`);
+      assert.equal(result.sourceScriptId, VALID_SCRIPT_ID);
+    });
+
+    it('returns error when neither scriptId nor .clasp.json is available', async () => {
+      const result = await handleProjectCopyTool(
+        { localDir: tmpDir },
+        makeFileOps([]),
+        makeProjectOps(),
+      );
+
+      assert.equal(result.success, false);
+      assert.ok(result.error?.includes('No scriptId provided'), `got: ${result.error}`);
+    });
   });
 });

@@ -502,4 +502,40 @@ describe('handleExecTool', () => {
     assert.equal(fetchStub.callCount, 1, 'should not follow non-google.com redirect');
     assert.equal(result.success, false);
   });
+
+  // --- .clasp.json resolution ---
+
+  it('reads scriptId from .clasp.json when scriptId is omitted', async () => {
+    await fs.writeFile(
+      path.join(tmpDir, '.clasp.json'),
+      JSON.stringify({ scriptId: VALID_SCRIPT_ID }),
+      'utf-8'
+    );
+
+    const fetchStub = sinon.stub(global, 'fetch').resolves(
+      makeFetchResponse({ json: { success: true, result: 42, logger_output: '' } }),
+    );
+
+    const result = await handleExecTool(
+      { function: 'myFn', localDir: tmpDir },
+      makeFileOps(), makeSession(), makeDeployOps(),
+    );
+
+    fetchStub.restore();
+    // Should succeed — scriptId resolved from .clasp.json
+    assert.equal(result.success, true, `expected success, got: ${result.error}`);
+  });
+
+  it('returns error when neither scriptId nor .clasp.json is available', async () => {
+    // Remove .clasp.json if it exists
+    try { await fs.unlink(path.join(tmpDir, '.clasp.json')); } catch { /* ENOENT OK */ }
+
+    const result = await handleExecTool(
+      { function: 'myFn', localDir: tmpDir },
+      makeFileOps(), makeSession(), makeDeployOps(),
+    );
+
+    assert.equal(result.success, false);
+    assert.ok(result.error?.includes('No scriptId provided'), `got: ${result.error}`);
+  });
 });
