@@ -17,6 +17,7 @@ import { getDeploymentInfo, setDeploymentInfo } from '../config/deployConfig.js'
 import { buildHintContext } from '../utils/hintContext.js';
 import { SessionManager } from '../auth/sessionManager.js';
 import { SCRIPT_ID_PATTERN, FUNCTION_PATTERN, MODULE_NAME_PATTERN } from '../utils/validation.js';
+import { executeRawJs, normalizeWebAppUrl } from '../utils/gasExecutor.js';
 import type { ValidationResult } from '../validation/commonjsValidator.js';
 
 export interface ExecToolParams {
@@ -75,19 +76,7 @@ Requirements:
   },
 };
 
-/**
- * Convert a workspace-domain web app URL to the standard format that accepts Bearer tokens.
- *
- * Workspace URLs (https://script.google.com/a/macros/<domain>/s/<id>/exec) trigger
- * Google Workspace IAP, which rejects programmatic Bearer tokens.
- * Standard URLs (https://script.google.com/macros/s/<id>/exec) accept Bearer tokens.
- */
-function normalizeWebAppUrl(url: string): string {
-  return url.replace(
-    /https:\/\/script\.google\.com\/a\/macros\/[^/]+\/s\//,
-    'https://script.google.com/macros/s/'
-  );
-}
+// normalizeWebAppUrl and executeRawJs are imported from ../utils/gasExecutor.js
 
 export async function handleExecTool(
   params: ExecToolParams,
@@ -238,118 +227,35 @@ export async function handleExecTool(
     }
 
     // Build JS statement for the __mcp_exec.gs GET handler.
-    // Uses the proven mcp_gas exec pattern: GET ?_mcp_run=true&func=<encoded_js>
-    // POST to workspace-domain web apps triggers IAP redirect chains that reject Bearer tokens.
-    // GET with redirect:follow successfully authenticates through the IAP redirect.
     const argsList = (args ?? []).map(a => JSON.stringify(a)).join(', ');
     const jsStatement = moduleName
       ? `require('${moduleName}').${functionName}(${argsList})`
       : `require('runner-api').${functionName}(${argsList})`;
 
-    // headUrl is a HEAD deployment URL (ends in /dev) — accepts ?_mcp_run=true directly.
-    // Normalize workspace domain to standard format so Bearer tokens are accepted.
-    const normalizedUrl = normalizeWebAppUrl(headUrl);
-    const separator = normalizedUrl.includes('?') ? '&' : '?';
-    const execGetUrl = `${normalizedUrl}${separator}_mcp_run=true&func=${encodeURIComponent(jsStatement)}`;
+    const rawResult = await executeRawJs(jsStatement, headUrl, token);
 
-    // Follow redirects manually so the Bearer token is only forwarded to *.google.com hops.
-    // GAS web apps use an IAP redirect chain (script.google.com → accounts.google.com) before
-    // serving the response; redirect:'follow' would send the token to any redirect target.
-    // We stop at the first non-google.com redirect to prevent token leakage.
-    const signal = AbortSignal.timeout(30_000);
-    let response = await fetch(execGetUrl, {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Accept': 'application/json',
-      },
-      redirect: 'manual',
-      signal,
-    });
-
-    // Follow up to 5 redirects, forwarding the Bearer token only to *.google.com targets
-    let redirectHops = 0;
-    let currentUrl = execGetUrl;
-    while ((response.status === 301 || response.status === 302 || response.status === 303 || response.status === 307 || response.status === 308) && redirectHops < 5) {
-      const location = response.headers.get('location');
-      if (!location) break;
-      const redirectUrl = new URL(location, currentUrl);
-      currentUrl = redirectUrl.toString();
-      const isGoogleHost = redirectUrl.hostname.endsWith('.google.com')
-        || redirectUrl.hostname === 'google.com'
-        || redirectUrl.hostname.endsWith('.googleusercontent.com');
-      if (!isGoogleHost) {
-        // Non-Google redirect — stop following; let the final response be handled below
-        break;
-      }
-      redirectHops++;
-      response = await fetch(redirectUrl.toString(), {
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Accept': 'application/json',
-        },
-        redirect: 'manual',
-        signal,
-      });
-    }
-
-    if (!response.ok) {
-      const text = await response.text();
-      // If HTML response, likely needs browser auth (one-time per project)
-      const isHtml = text.trimStart().startsWith('<!');
+    if (!rawResult.success) {
+      const normalizedUrl = normalizeWebAppUrl(headUrl);
+      const isBrowserAuth = rawResult.error?.includes('browser authorization');
       return {
         success: false, filesSync,
-        error: isHtml
-          ? `Web app needs browser authorization. Visit the URL in Chrome to authorize: ${normalizedUrl}`
-          : `Execution failed (HTTP ${response.status}): ${text}`,
+        error: rawResult.error,
+        logs: rawResult.logs,
         hints: {
-          fix: isHtml
+          fix: isBrowserAuth
             ? 'Open the deployment URL in a browser signed in as the script owner, then retry exec'
-            : 'Check the function name and deployment configuration',
-          exports: 'Function must be exported inside _main(): exports.myFn = function(){...} — bare function declarations are NOT callable via exec',
-        },
-      };
-    }
-
-    // A 200 OK with text/html content-type means a browser authorization page —
-    // GAS web apps require one-time owner authorization via browser on new projects.
-    const contentType = response.headers.get('content-type') ?? '';
-    if (contentType.includes('text/html')) {
-      return {
-        success: false, filesSync,
-        error: `Web app needs browser authorization. Visit the URL in Chrome to authorize: ${normalizedUrl}`,
-        hints: {
-          fix: 'Open the deployment URL in a browser signed in as the script owner, then retry exec',
-          exports: 'Function must be exported inside _main(): exports.myFn = function(){...} — bare function declarations are NOT callable via exec',
-        },
-      };
-    }
-
-    // Response format from __mcp_exec.gs: { success, result, logger_output } or { success, error, logger_output }
-    const data = await response.json() as {
-      success?: boolean;
-      result?: unknown;
-      error?: string;
-      logger_output?: string;
-    };
-
-    if (data.success !== true) {
-      return {
-        success: false, filesSync,
-        error: data.error ?? 'Unknown execution error',
-        logs: data.logger_output,
-        hints: {
-          fix: 'Check the function and module names, ensure function is exported inside _main().',
-          invocation: jsStatement,
+            : 'Check the function and module names, ensure function is exported inside _main().',
+          ...(isBrowserAuth
+            ? { exports: 'Function must be exported inside _main(): exports.myFn = function(){...} — bare function declarations are NOT callable via exec' }
+            : { invocation: jsStatement }),
         },
       };
     }
 
     return {
       success: true,
-      result: data.result,
-      logs: data.logger_output,
+      result: rawResult.result,
+      logs: rawResult.logs,
       filesSync,
       hints: {
         next: `Function executed. ${filesSync} files pushed before execution.`,
