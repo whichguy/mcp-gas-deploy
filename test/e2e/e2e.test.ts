@@ -35,6 +35,7 @@ import { handleProjectsTool } from '../../src/tools/projectsTool.js';
 import { handleDeployTool } from '../../src/tools/deployTool.js';
 import { handleExecTool } from '../../src/tools/execTool.js';
 import { handleTriggerTool } from '../../src/tools/triggerTool.js';
+import { handleProjectCopyTool } from '../../src/tools/projectCopyTool.js';
 
 // Setup chain mirrors src/server.ts wiring
 const sessionManager = new SessionManager();
@@ -54,6 +55,8 @@ describe('mcp-gas-deploy E2E', function () {
   let scriptId: string;
   let tmpDir: string;
   let pullDir: string | undefined;
+  let copyNewScriptId: string | undefined;    // T10 cleanup
+  let copyDestScriptId: string | undefined;   // T11 cleanup
 
   before(async function () {
     // Skip entire suite if not authenticated
@@ -92,6 +95,8 @@ describe('mcp-gas-deploy E2E', function () {
 
   after(async function () {
     if (scriptId) await projectOps.trashProject(scriptId).catch(e => console.error('cleanup trashProject:', e));
+    if (copyNewScriptId) await projectOps.trashProject(copyNewScriptId).catch(e => console.error('cleanup copyNew:', e));
+    if (copyDestScriptId) await projectOps.trashProject(copyDestScriptId).catch(e => console.error('cleanup copyDest:', e));
     if (tmpDir) await fs.rm(tmpDir, { recursive: true, force: true }).catch(e => console.error('cleanup tmpDir:', e));
     if (pullDir) await fs.rm(pullDir, { recursive: true, force: true }).catch(e => console.error('cleanup pullDir:', e));
   });
@@ -254,5 +259,47 @@ describe('mcp-gas-deploy E2E', function () {
     );
     assert.ok(listAfter.success, `list (after) failed: ${listAfter.error}`);
     assert.equal(listAfter.totalTriggers, baselineCount, 'Expected trigger count back to baseline');
+  });
+
+  it('T10: project_copy: create new project from source', async function () {
+    const result = await handleProjectCopyTool(
+      { scriptId, title: 'E2E Copy Test' },
+      fileOps,
+      projectOps
+    );
+    assert.ok(result.success, `project_copy failed: ${result.error}`);
+    assert.strictEqual(result.mode, 'created', 'Expected mode === created');
+    assert.ok((result.filesCopied ?? 0) > 0, 'Expected filesCopied > 0');
+    assert.strictEqual(result.targetScriptId, result.newScriptId, 'targetScriptId must equal newScriptId (backward compat)');
+
+    copyNewScriptId = result.targetScriptId;
+
+    // Round-trip: ls the new project to confirm files arrived
+    const ls = await handleLsTool({ scriptId: copyNewScriptId! }, fileOps);
+    assert.ok(ls.success, `ls on copy failed: ${ls.error}`);
+    assert.strictEqual(ls.count, result.filesCopied, 'ls count must match filesCopied');
+    assert.ok(ls.files?.some(f => f.name === 'hello'), 'Expected hello file in copied project');
+  });
+
+  it('T11: project_copy: copy into existing project (destinationScriptId)', async function () {
+    // Create a fresh empty destination project
+    const destProject = await projectOps.createProject('E2E Copy Dest');
+    copyDestScriptId = destProject.scriptId;
+
+    const result = await handleProjectCopyTool(
+      { scriptId, destinationScriptId: copyDestScriptId },
+      fileOps,
+      projectOps
+    );
+    assert.ok(result.success, `project_copy (destination) failed: ${result.error}`);
+    assert.strictEqual(result.mode, 'overwritten', 'Expected mode === overwritten');
+    assert.ok((result.filesCopied ?? 0) > 0, 'Expected filesCopied > 0');
+    assert.strictEqual(result.targetScriptId, copyDestScriptId, 'targetScriptId must equal destinationScriptId');
+
+    // Round-trip: ls the destination to confirm files arrived
+    const ls = await handleLsTool({ scriptId: copyDestScriptId }, fileOps);
+    assert.ok(ls.success, `ls on destination failed: ${ls.error}`);
+    assert.strictEqual(ls.count, result.filesCopied, 'ls count must match filesCopied');
+    assert.ok(ls.files?.some(f => f.name === 'hello'), 'Expected hello file in destination project');
   });
 });
