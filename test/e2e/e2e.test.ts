@@ -57,6 +57,7 @@ describe('mcp-gas-deploy E2E', function () {
   let pullDir: string | undefined;
   let copyNewScriptId: string | undefined;    // T10 cleanup
   let copyDestScriptId: string | undefined;   // T11 cleanup
+  let copyLocalDir: string | undefined;       // T10 exec needs localDir
 
   before(async function () {
     // Skip entire suite if not authenticated
@@ -99,6 +100,7 @@ describe('mcp-gas-deploy E2E', function () {
     if (copyDestScriptId) await projectOps.trashProject(copyDestScriptId).catch(e => console.error('cleanup copyDest:', e));
     if (tmpDir) await fs.rm(tmpDir, { recursive: true, force: true }).catch(e => console.error('cleanup tmpDir:', e));
     if (pullDir) await fs.rm(pullDir, { recursive: true, force: true }).catch(e => console.error('cleanup pullDir:', e));
+    if (copyLocalDir) await fs.rm(copyLocalDir, { recursive: true, force: true }).catch(e => console.error('cleanup copyLocalDir:', e));
   });
 
   it('T1: ls: lists pushed files on remote', async function () {
@@ -261,7 +263,8 @@ describe('mcp-gas-deploy E2E', function () {
     assert.equal(listAfter.totalTriggers, baselineCount, 'Expected trigger count back to baseline');
   });
 
-  it('T10: project_copy: create new project from source', async function () {
+  it('T10: project_copy: create new project, verify files, deploy, exec hello.greet()', async function () {
+    // Step 1: Copy source project into a new project
     const result = await handleProjectCopyTool(
       { scriptId, title: 'E2E Copy Test' },
       fileOps,
@@ -274,11 +277,38 @@ describe('mcp-gas-deploy E2E', function () {
 
     copyNewScriptId = result.targetScriptId;
 
-    // Round-trip: ls the new project to confirm files arrived
+    // Step 2: ls the new project to confirm files arrived
     const ls = await handleLsTool({ scriptId: copyNewScriptId! }, fileOps);
     assert.ok(ls.success, `ls on copy failed: ${ls.error}`);
     assert.strictEqual(ls.count, result.filesCopied, 'ls count must match filesCopied');
     assert.ok(ls.files?.some(f => f.name === 'hello'), 'Expected hello file in copied project');
+
+    // Step 3: Pull copied project files to a local dir (exec needs localDir for auto-push)
+    const cacheDir = path.join(os.homedir(), '.cache', 'mcp-gas-deploy-test');
+    copyLocalDir = await fs.mkdtemp(path.join(cacheDir, 'e2e-copy-'));
+    const pullResult = await handlePullTool({ scriptId: copyNewScriptId!, targetDir: copyLocalDir }, fileOps);
+    assert.ok(pullResult.success, `pull on copy failed: ${pullResult.error}`);
+
+    // Step 4: Deploy the copied project (creates HEAD deployment for exec)
+    const deployResult = await handleDeployTool({ scriptId: copyNewScriptId!, localDir: copyLocalDir }, fileOps, deployOps);
+    assert.ok(deployResult.success, `deploy on copy failed: ${deployResult.error}`);
+
+    // Step 5: Exec hello.greet() on the copied project — proves code is functionally equivalent
+    const execResult = await handleExecTool(
+      { scriptId: copyNewScriptId!, localDir: copyLocalDir, module: 'hello', function: 'greet' },
+      fileOps,
+      sessionManager,
+      deployOps,
+    );
+    // Skip if browser authorization needed (new project not yet authorized in browser)
+    if (!execResult.success && execResult.error?.includes('browser authorization')) {
+      return this.skip();
+    }
+    assert.ok(execResult.success, `exec on copy failed: ${execResult.error}`);
+    assert.ok(
+      String(execResult.result).includes('Hello'),
+      `Expected copied project greet() to return 'Hello', got: ${JSON.stringify(execResult.result)}`,
+    );
   });
 
   it('T11: project_copy: copy into existing project (destinationScriptId)', async function () {
