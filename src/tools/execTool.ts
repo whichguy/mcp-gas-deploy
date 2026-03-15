@@ -17,7 +17,7 @@ import { getDeploymentInfo, setDeploymentInfo } from '../config/deployConfig.js'
 import { buildHintContext } from '../utils/hintContext.js';
 import { SessionManager } from '../auth/sessionManager.js';
 import { SCRIPT_ID_PATTERN, FUNCTION_PATTERN, MODULE_NAME_PATTERN } from '../utils/validation.js';
-import { executeRawJs, normalizeWebAppUrl } from '../utils/gasExecutor.js';
+import { executeRawJs } from '../utils/gasExecutor.js';
 import type { ValidationResult } from '../validation/commonjsValidator.js';
 
 export interface ExecToolParams {
@@ -75,8 +75,6 @@ Requirements:
     required: ['scriptId', 'function'],
   },
 };
-
-// normalizeWebAppUrl and executeRawJs are imported from ../utils/gasExecutor.js
 
 export async function handleExecTool(
   params: ExecToolParams,
@@ -235,7 +233,6 @@ export async function handleExecTool(
     const rawResult = await executeRawJs(jsStatement, headUrl, token);
 
     if (!rawResult.success) {
-      const normalizedUrl = normalizeWebAppUrl(headUrl);
       const isBrowserAuth = rawResult.error?.includes('browser authorization');
       return {
         success: false, filesSync,

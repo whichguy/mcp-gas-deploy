@@ -58,7 +58,7 @@ export interface TriggerToolParams {
 }
 
 export interface TriggerInfo {
-  triggerId: string;
+  triggerId?: string;
   functionName: string;
   triggerType: string;
   eventType?: string;
