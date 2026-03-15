@@ -55,6 +55,128 @@ function findLineNumber(source: string, pattern: RegExp): number | undefined {
 }
 
 /**
+ * Strip comments, string/template literals, and regex literals from source,
+ * preserving line structure. Replaces non-newline characters with spaces so
+ * line numbers stay correct. Prevents false positives from require() in
+ * comments, braces in strings, or quotes inside regex like /"/g.
+ */
+function stripForAnalysis(source: string): string {
+  const result: string[] = [];
+  let i = 0;
+  const len = source.length;
+  // Track last non-whitespace char for regex-vs-division disambiguation
+  let lastSig = '';
+  // Characters after which `/` starts a regex (not division)
+  const REGEX_PREV = new Set([
+    '=', '(', '[', '{', '}', ',', ';', '!', '&', '|',
+    '?', ':', '~', '^', '<', '>', '%', '+', '-',
+  ]);
+
+  /** Skip a quoted string (single or double), replacing content with spaces */
+  function skipString(quote: string): void {
+    result.push(quote); i++;
+    while (i < len && source[i] !== quote) {
+      if (source[i] === '\\' && i + 1 < len) {
+        result.push(' ', source[i + 1] === '\n' ? '\n' : ' ');
+        i += 2;
+      } else {
+        result.push(source[i] === '\n' ? '\n' : ' ');
+        i++;
+      }
+    }
+    if (i < len) { result.push(quote); i++; }
+  }
+
+  while (i < len) {
+    const ch = source[i];
+    const next = i + 1 < len ? source[i + 1] : '';
+    // Single-line comment
+    if (ch === '/' && next === '/') {
+      while (i < len && source[i] !== '\n') { result.push(' '); i++; }
+      continue;
+    }
+    // Multi-line comment
+    if (ch === '/' && next === '*') {
+      result.push(' ', ' '); i += 2;
+      while (i < len && !(source[i] === '*' && i + 1 < len && source[i + 1] === '/')) {
+        result.push(source[i] === '\n' ? '\n' : ' ');
+        i++;
+      }
+      if (i < len) { result.push(' ', ' '); i += 2; }
+      continue;
+    }
+    // Regex literal: `/` preceded by an expression-start character
+    if (ch === '/' && next !== '/' && next !== '*' &&
+        (REGEX_PREV.has(lastSig) || lastSig === '')) {
+      result.push('/'); i++;
+      while (i < len && source[i] !== '/' && source[i] !== '\n') {
+        if (source[i] === '\\' && i + 1 < len && source[i + 1] !== '\n') {
+          result.push(' ', ' '); i += 2;
+        } else {
+          result.push(' '); i++;
+        }
+      }
+      if (i < len && source[i] === '/') {
+        result.push('/'); i++;
+        while (i < len && /[gimsuy]/.test(source[i])) { result.push(source[i]); i++; }
+      }
+      lastSig = '/';
+      continue;
+    }
+    // String literals (single or double quoted)
+    if (ch === "'" || ch === '"') {
+      skipString(ch);
+      lastSig = ch;
+      continue;
+    }
+    // Template literal
+    if (ch === '`') {
+      result.push(' '); i++; // opening backtick → space
+      while (i < len && source[i] !== '`') {
+        if (source[i] === '\\' && i + 1 < len) {
+          result.push(' ', source[i + 1] === '\n' ? '\n' : ' ');
+          i += 2;
+        } else if (source[i] === '$' && i + 1 < len && source[i + 1] === '{') {
+          // Template expression: replace ${ and closing } with spaces, keep content
+          result.push(' ', ' '); i += 2;
+          let depth = 1;
+          while (i < len && depth > 0) {
+            if (source[i] === "'" || source[i] === '"') {
+              skipString(source[i]);
+            } else if (source[i] === '`') {
+              // Nested template — strip content (no deep recursion)
+              result.push(' '); i++;
+              while (i < len && source[i] !== '`') {
+                result.push(source[i] === '\n' ? '\n' : ' '); i++;
+              }
+              if (i < len) { result.push(' '); i++; }
+            } else if (source[i] === '{') {
+              depth++; result.push(source[i]); i++;
+            } else if (source[i] === '}') {
+              depth--;
+              if (depth === 0) { result.push(' '); i++; }
+              else { result.push(source[i]); i++; }
+            } else {
+              result.push(source[i]); i++;
+            }
+          }
+        } else {
+          result.push(source[i] === '\n' ? '\n' : ' ');
+          i++;
+        }
+      }
+      if (i < len) { result.push(' '); i++; } // closing backtick → space
+      lastSig = '`';
+      continue;
+    }
+    result.push(ch);
+    if (ch !== ' ' && ch !== '\t' && ch !== '\n' && ch !== '\r') lastSig = ch;
+    i++;
+  }
+  return result.join('');
+}
+
+/**
  * Find the range of the _main() function body.
  * Returns [startLine, endLine] (1-based) or null if not found.
  *
@@ -63,7 +185,8 @@ function findLineNumber(source: string, pattern: RegExp): number | undefined {
  *   Phase 2 — count body braces from the opening `{` to find the closing `}`.
  */
 function findMainFunctionRange(source: string): [number, number] | null {
-  const lines = source.split('\n');
+  const stripped = stripForAnalysis(source);
+  const lines = stripped.split('\n');
   const mainPattern = /^\s*function\s+_main\s*\(/;
   let startLine = -1;
 
@@ -188,18 +311,33 @@ function checkLoadNowRequired(source: string, _file: string): ValidationError[] 
 }
 
 /**
- * TOP_LEVEL_REQUIRE: `require()` must only appear inside `_main()`.
- * Top-level require fails because modules are not registered until _main runs.
+ * TOP_LEVEL_REQUIRE: `require()` must only appear inside `_main()` or
+ * inside another function body (e.g. hoisted Sheets custom functions).
+ * Truly top-level (brace depth 0) require fails because modules are not
+ * registered until _main runs.
  */
 function checkTopLevelRequire(source: string, _file: string): ValidationError[] {
   const mainRange = findMainFunctionRange(source);
   const errors: ValidationError[] = [];
-  const lines = source.split('\n');
+  const stripped = stripForAnalysis(source);
+  const lines = stripped.split('\n');
   // Match `require(` — bounded, non-nested quantifier
   const requirePattern = /\brequire\s*\(/;
 
+  // Compute cumulative brace depth at each line start.
+  // Depth > 0 means we're inside some block (e.g. a hoisted function body).
+  const lineDepth: number[] = new Array(lines.length).fill(0);
+  let depth = 0;
+  for (let ln = 0; ln < lines.length; ln++) {
+    lineDepth[ln] = depth;
+    for (const ch of lines[ln]) {
+      if (ch === '{') depth++;
+      else if (ch === '}') depth--;
+    }
+  }
+
   for (let i = 0; i < lines.length; i++) {
-    if (requirePattern.test(lines[i]) && !isInsideMain(mainRange, i + 1)) {
+    if (requirePattern.test(lines[i]) && !isInsideMain(mainRange, i + 1) && lineDepth[i] === 0) {
       errors.push({
         rule: RULES.TOP_LEVEL_REQUIRE,
         line: i + 1,
@@ -218,12 +356,25 @@ function checkTopLevelRequire(source: string, _file: string): ValidationError[] 
 function checkTopLevelExports(source: string, _file: string): ValidationError[] {
   const mainRange = findMainFunctionRange(source);
   const errors: ValidationError[] = [];
-  const lines = source.split('\n');
+  const stripped = stripForAnalysis(source);
+  const lines = stripped.split('\n');
   // Match `exports.something = ` — bounded pattern
   const exportsPattern = /\bexports\.[A-Za-z_$][A-Za-z0-9_$]*\s*=/;
 
+  // Compute cumulative brace depth at each line start.
+  // Depth > 0 means we're inside some block (e.g. a hoisted function body).
+  const lineDepth: number[] = new Array(lines.length).fill(0);
+  let depth = 0;
+  for (let ln = 0; ln < lines.length; ln++) {
+    lineDepth[ln] = depth;
+    for (const ch of lines[ln]) {
+      if (ch === '{') depth++;
+      else if (ch === '}') depth--;
+    }
+  }
+
   for (let i = 0; i < lines.length; i++) {
-    if (exportsPattern.test(lines[i]) && !isInsideMain(mainRange, i + 1)) {
+    if (exportsPattern.test(lines[i]) && !isInsideMain(mainRange, i + 1) && lineDepth[i] === 0) {
       errors.push({
         rule: RULES.TOP_LEVEL_EXPORTS,
         line: i + 1,
@@ -242,12 +393,25 @@ function checkTopLevelExports(source: string, _file: string): ValidationError[] 
 function checkEventsOutsideMain(source: string, _file: string): ValidationError[] {
   const mainRange = findMainFunctionRange(source);
   const errors: ValidationError[] = [];
-  const lines = source.split('\n');
+  const stripped = stripForAnalysis(source);
+  const lines = stripped.split('\n');
   // Match `__events__.something` — bounded pattern
   const eventsPattern = /\b__events__\.[A-Za-z_$][A-Za-z0-9_$]*/;
 
+  // Compute cumulative brace depth at each line start.
+  // Depth > 0 means we're inside some block (e.g. a hoisted function body).
+  const lineDepth: number[] = new Array(lines.length).fill(0);
+  let depth = 0;
+  for (let ln = 0; ln < lines.length; ln++) {
+    lineDepth[ln] = depth;
+    for (const ch of lines[ln]) {
+      if (ch === '{') depth++;
+      else if (ch === '}') depth--;
+    }
+  }
+
   for (let i = 0; i < lines.length; i++) {
-    if (eventsPattern.test(lines[i]) && !isInsideMain(mainRange, i + 1)) {
+    if (eventsPattern.test(lines[i]) && !isInsideMain(mainRange, i + 1) && lineDepth[i] === 0) {
       errors.push({
         rule: RULES.EVENTS_OUTSIDE_MAIN,
         line: i + 1,
