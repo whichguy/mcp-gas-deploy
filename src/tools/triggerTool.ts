@@ -779,6 +779,10 @@ function validateTimeParams(params: TriggerToolParams): TriggerToolResult | null
     return { success: false, action: 'create', error: 'specificDate is required for one-time triggers', hints: { fix: 'Provide specificDate as ISO date string (e.g. "2025-03-15T10:00:00Z")' } };
   }
 
+  if (params.interval === 'monthly' && params.monthDay === undefined) {
+    return { success: false, action: 'create', error: 'monthDay is required for monthly triggers', hints: { fix: 'Provide monthDay (1-31) — e.g. monthDay: 1 for the first of each month. GAS uses onMonthDay() as the frequency specifier for monthly triggers.' } };
+  }
+
   if (params.weekDay && !isValidEnum(params.weekDay, VALID_WEEK_DAYS)) {
     return { success: false, action: 'create', error: `Invalid weekDay: ${params.weekDay}`, hints: { fix: 'Valid weekDays: MONDAY, TUESDAY, WEDNESDAY, THURSDAY, FRIDAY, SATURDAY, SUNDAY' } };
   }
