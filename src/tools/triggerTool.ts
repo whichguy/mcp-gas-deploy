@@ -11,7 +11,7 @@ import os from 'node:os';
 import { GASDeployOperations } from '../api/gasDeployOperations.js';
 import { getDeploymentInfo, setDeploymentInfo } from '../config/deployConfig.js';
 import { SessionManager } from '../auth/sessionManager.js';
-import { SCRIPT_ID_PATTERN, TRIGGER_ID_PATTERN } from '../utils/validation.js';
+import { SCRIPT_ID_PATTERN, TRIGGER_ID_PATTERN, FUNCTION_PATTERN } from '../utils/validation.js';
 import { executeRawJs, escapeGasString } from '../utils/gasExecutor.js';
 
 // --- Types ---
@@ -576,6 +576,14 @@ async function handleCreate(params: TriggerToolParams, headUrl: string, token: s
       hints: { fix: 'functionName is required — specify the function to call when trigger fires' },
     };
   }
+  if (!FUNCTION_PATTERN.test(params.functionName)) {
+    return {
+      success: false, action: 'create',
+      error: 'Invalid functionName format',
+      hints: { fix: 'functionName must be a valid JavaScript identifier (letters, digits, _, $)' },
+    };
+  }
+
   if (!params.triggerType) {
     return {
       success: false, action: 'create',
