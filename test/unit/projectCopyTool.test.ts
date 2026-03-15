@@ -1,7 +1,8 @@
 /**
  * Unit tests for handleProjectCopyTool
  *
- * Tests input validation, successful copy flow, error handling.
+ * Tests input validation, successful copy flow, error handling,
+ * and destinationScriptId (copy-into-existing) flows.
  * GASFileOperations and GASProjectOperations are mocked via sinon.
  */
 
@@ -15,6 +16,7 @@ import type { GASFile } from '../../src/api/gasTypes.js';
 
 const VALID_SCRIPT_ID = 'abcdefghij1234567890';
 const NEW_SCRIPT_ID = 'newprojectid12345678';
+const DEST_SCRIPT_ID = 'destprojectid1234567';
 
 function makeFileOps(remoteFiles: GASFile[]): GASFileOperations {
   return {
@@ -67,6 +69,8 @@ describe('handleProjectCopyTool', () => {
 
     assert.equal(result.success, true);
     assert.equal(result.newScriptId, NEW_SCRIPT_ID);
+    assert.equal(result.targetScriptId, NEW_SCRIPT_ID);
+    assert.equal(result.mode, 'created');
     assert.equal(result.filesCopied, 2);
     assert.equal(result.sourceScriptId, VALID_SCRIPT_ID);
 
@@ -141,6 +145,18 @@ describe('handleProjectCopyTool', () => {
 
     assert.ok(result.hints.next, 'should have a next hint');
     assert.ok(result.hints.next.includes(NEW_SCRIPT_ID), `hint should include new scriptId, got: ${result.hints.next}`);
+  });
+
+  it('backward compat: both newScriptId and targetScriptId set to same value on create', async () => {
+    const result = await handleProjectCopyTool(
+      { scriptId: VALID_SCRIPT_ID },
+      makeFileOps([gasFile('main')]),
+      makeProjectOps()
+    );
+
+    assert.equal(result.success, true);
+    assert.equal(result.newScriptId, result.targetScriptId);
+    assert.equal(result.mode, 'created');
   });
 
   // --- Error handling ---
@@ -248,5 +264,124 @@ describe('handleProjectCopyTool', () => {
     const called = (fileOps.updateProjectFiles as sinon.SinonStub).firstCall.args[1] as { name: string }[];
     assert.equal(called[0].name, 'utils', 'non-loadNow file must be first');
     assert.equal(called[called.length - 1].name, 'events', 'loadNow file must be last in copy payload');
+  });
+
+  // --- destinationScriptId (copy into existing project) ---
+
+  it('destinationScriptId: copies files into existing project, no createProject call, mode=overwritten', async () => {
+    const files = [gasFile('main'), gasFile('utils')];
+    const fileOps = makeFileOps(files);
+    const projectOps = {
+      getProjectTitle: sinon.stub().resolves('Existing Project'),
+      createProject: sinon.stub().rejects(new Error('should not be called')),
+      listProjects: sinon.stub().resolves([]),
+    } as unknown as GASProjectOperations;
+
+    const result = await handleProjectCopyTool(
+      { scriptId: VALID_SCRIPT_ID, destinationScriptId: DEST_SCRIPT_ID },
+      fileOps,
+      projectOps
+    );
+
+    assert.equal(result.success, true);
+    assert.equal(result.targetScriptId, DEST_SCRIPT_ID);
+    assert.equal(result.newScriptId, DEST_SCRIPT_ID);
+    assert.equal(result.mode, 'overwritten');
+    assert.equal(result.filesCopied, 2);
+    sinon.assert.notCalled(projectOps.createProject as sinon.SinonStub);
+
+    // Verify updateProjectFiles called with destination scriptId
+    const [calledScriptId] = (fileOps.updateProjectFiles as sinon.SinonStub).firstCall.args as [string, unknown];
+    assert.equal(calledScriptId, DEST_SCRIPT_ID);
+  });
+
+  it('destinationScriptId: destination not found returns error with hint', async () => {
+    const projectOps = {
+      getProjectTitle: sinon.stub().resolves(null),
+      createProject: sinon.stub().resolves({ scriptId: NEW_SCRIPT_ID, title: 'test' }),
+      listProjects: sinon.stub().resolves([]),
+    } as unknown as GASProjectOperations;
+
+    const result = await handleProjectCopyTool(
+      { scriptId: VALID_SCRIPT_ID, destinationScriptId: DEST_SCRIPT_ID },
+      makeFileOps([gasFile('main')]),
+      projectOps
+    );
+
+    assert.equal(result.success, false);
+    assert.ok(result.error?.includes('not found'), `got: ${result.error}`);
+    assert.ok(result.hints.fix?.includes('destinationScriptId'), `hint should mention destinationScriptId, got: ${result.hints.fix}`);
+  });
+
+  it('destinationScriptId: invalid format returns validation error', async () => {
+    const result = await handleProjectCopyTool(
+      { scriptId: VALID_SCRIPT_ID, destinationScriptId: 'short' },
+      makeFileOps([gasFile('main')]),
+      makeProjectOps()
+    );
+
+    assert.equal(result.success, false);
+    assert.ok(result.error?.includes('Invalid destinationScriptId'), `got: ${result.error}`);
+  });
+
+  it('destinationScriptId: omitted creates new project with mode=created', async () => {
+    const result = await handleProjectCopyTool(
+      { scriptId: VALID_SCRIPT_ID },
+      makeFileOps([gasFile('main')]),
+      makeProjectOps('Source')
+    );
+
+    assert.equal(result.success, true);
+    assert.equal(result.mode, 'created');
+    assert.equal(result.targetScriptId, NEW_SCRIPT_ID);
+  });
+
+  it('destinationScriptId: same as scriptId returns self-copy error', async () => {
+    const result = await handleProjectCopyTool(
+      { scriptId: VALID_SCRIPT_ID, destinationScriptId: VALID_SCRIPT_ID },
+      makeFileOps([gasFile('main')]),
+      makeProjectOps()
+    );
+
+    assert.equal(result.success, false);
+    assert.ok(result.error?.includes('same'), `got: ${result.error}`);
+  });
+
+  it('destinationScriptId: both targetScriptId and newScriptId present in result (backward compat)', async () => {
+    const projectOps = {
+      getProjectTitle: sinon.stub().resolves('Existing'),
+      createProject: sinon.stub().resolves({ scriptId: NEW_SCRIPT_ID, title: 'test' }),
+      listProjects: sinon.stub().resolves([]),
+    } as unknown as GASProjectOperations;
+
+    const result = await handleProjectCopyTool(
+      { scriptId: VALID_SCRIPT_ID, destinationScriptId: DEST_SCRIPT_ID },
+      makeFileOps([gasFile('main')]),
+      projectOps
+    );
+
+    assert.equal(result.success, true);
+    assert.equal(result.newScriptId, DEST_SCRIPT_ID, 'newScriptId should be set for backward compat');
+    assert.equal(result.targetScriptId, DEST_SCRIPT_ID, 'targetScriptId should be set');
+    assert.equal(result.newScriptId, result.targetScriptId, 'both fields must match');
+  });
+
+  it('destinationScriptId: overwritten mode includes file-overwrite warning', async () => {
+    const projectOps = {
+      getProjectTitle: sinon.stub().resolves('Existing'),
+      createProject: sinon.stub().resolves({ scriptId: NEW_SCRIPT_ID, title: 'test' }),
+      listProjects: sinon.stub().resolves([]),
+    } as unknown as GASProjectOperations;
+
+    const result = await handleProjectCopyTool(
+      { scriptId: VALID_SCRIPT_ID, destinationScriptId: DEST_SCRIPT_ID },
+      makeFileOps([gasFile('main')]),
+      projectOps
+    );
+
+    assert.ok(result.warnings, 'should have warnings');
+    const allWarnings = result.warnings!.join(' ');
+    assert.ok(allWarnings.includes('overwritten'), `should warn about overwritten files, got: ${allWarnings}`);
+    assert.ok(allWarnings.includes('properties'), `should mention properties preserved, got: ${allWarnings}`);
   });
 });
