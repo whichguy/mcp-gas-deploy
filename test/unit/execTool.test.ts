@@ -132,6 +132,157 @@ describe('handleExecTool', () => {
     );
   });
 
+  // --- js_statement mode validation ---
+
+  it('returns error when both js_statement and function are provided', async () => {
+    const result = await handleExecTool(
+      { scriptId: VALID_SCRIPT_ID, js_statement: 'return 2+2', function: 'myFn' },
+      makeFileOps(), makeSession(), makeDeployOps(),
+    );
+    assert.equal(result.success, false);
+    assert.ok(result.error?.includes('mutually exclusive'), `got: ${result.error}`);
+  });
+
+  it('returns error when neither js_statement nor function is provided', async () => {
+    const result = await handleExecTool(
+      { scriptId: VALID_SCRIPT_ID },
+      makeFileOps(), makeSession(), makeDeployOps(),
+    );
+    assert.equal(result.success, false);
+    assert.ok(result.error?.includes('Must provide'), `got: ${result.error}`);
+  });
+
+  it('returns error when module is used with js_statement', async () => {
+    const result = await handleExecTool(
+      { scriptId: VALID_SCRIPT_ID, js_statement: 'return 2+2', module: 'utils' },
+      makeFileOps(), makeSession(), makeDeployOps(),
+    );
+    assert.equal(result.success, false);
+    assert.ok(result.error?.includes('module') && result.error?.includes('js_statement'), `got: ${result.error}`);
+  });
+
+  it('returns error when args is used with js_statement', async () => {
+    const result = await handleExecTool(
+      { scriptId: VALID_SCRIPT_ID, js_statement: 'return 2+2', args: [1] },
+      makeFileOps(), makeSession(), makeDeployOps(),
+    );
+    assert.equal(result.success, false);
+    assert.ok(result.error?.includes('args') && result.error?.includes('js_statement'), `got: ${result.error}`);
+  });
+
+  it('js_statement is sent directly to fetch without function validation', async () => {
+    const fetchStub = sinon.stub(globalThis, 'fetch').resolves(
+      makeFetchResponse({
+        status: 200,
+        json: { success: true, result: 4 },
+      }),
+    );
+
+    const result = await handleExecTool(
+      { scriptId: VALID_SCRIPT_ID, js_statement: 'return 2+2', localDir: tmpDir },
+      makeFileOps(), makeSession(), makeDeployOps(),
+    );
+
+    assert.equal(result.success, true);
+    assert.equal(result.result, 4);
+    assert.ok(fetchStub.called, 'fetch should have been called');
+    // Verify the body contains the raw js_statement
+    const callArgs = fetchStub.firstCall.args[1] as RequestInit;
+    const body = JSON.parse(callArgs.body as string);
+    assert.equal(body.func, 'return 2+2');
+  });
+
+  it('js_statement with trailing underscore function skips fn validation', async () => {
+    sinon.stub(globalThis, 'fetch').resolves(
+      makeFetchResponse({
+        status: 200,
+        json: { success: true, result: 'ok' },
+      }),
+    );
+
+    // This would fail in function mode (trailing underscore), but js_statement mode skips validation
+    const result = await handleExecTool(
+      { scriptId: VALID_SCRIPT_ID, js_statement: "return require('x').fn_()", localDir: tmpDir },
+      makeFileOps(), makeSession(), makeDeployOps(),
+    );
+
+    assert.equal(result.success, true);
+  });
+
+  it('js_statement without return prefix emits returnPrefix hint on success', async () => {
+    sinon.stub(globalThis, 'fetch').resolves(
+      makeFetchResponse({
+        status: 200,
+        json: { success: true, result: undefined },
+      }),
+    );
+
+    const result = await handleExecTool(
+      { scriptId: VALID_SCRIPT_ID, js_statement: 'SpreadsheetApp.getActive().setName("test")', localDir: tmpDir },
+      makeFileOps(), makeSession(), makeDeployOps(),
+    );
+
+    assert.equal(result.success, true);
+    assert.ok(result.hints.returnPrefix, `returnPrefix hint should be present, got hints: ${JSON.stringify(result.hints)}`);
+    assert.ok(result.hints.returnPrefix?.includes('return'), `hint should mention "return", got: ${result.hints.returnPrefix}`);
+  });
+
+  it('js_statement with return prefix does not emit returnPrefix hint on success', async () => {
+    sinon.stub(globalThis, 'fetch').resolves(
+      makeFetchResponse({
+        status: 200,
+        json: { success: true, result: 4 },
+      }),
+    );
+
+    const result = await handleExecTool(
+      { scriptId: VALID_SCRIPT_ID, js_statement: 'return 2+2', localDir: tmpDir },
+      makeFileOps(), makeSession(), makeDeployOps(),
+    );
+
+    assert.equal(result.success, true);
+    assert.ok(!result.hints.returnPrefix, `returnPrefix hint should NOT be present when statement starts with return, got: ${result.hints.returnPrefix}`);
+  });
+
+  it('js_statement failure hint mentions JavaScript statement, not _main()', async () => {
+    sinon.stub(globalThis, 'fetch').resolves(
+      makeFetchResponse({
+        status: 200,
+        json: { success: false, error: 'ReferenceError: foo is not defined' },
+      }),
+    );
+
+    const result = await handleExecTool(
+      { scriptId: VALID_SCRIPT_ID, js_statement: 'return foo()', localDir: tmpDir },
+      makeFileOps(), makeSession(), makeDeployOps(),
+    );
+
+    assert.equal(result.success, false);
+    assert.ok(result.hints.fix?.includes('JavaScript statement'), `hint should mention JavaScript statement, got: ${result.hints.fix}`);
+    assert.ok(!result.hints.fix?.includes('_main'), `hint should not mention _main(), got: ${result.hints.fix}`);
+  });
+
+  it('js_statement browser auth error does not include exports hint', async () => {
+    sinon.stub(globalThis, 'fetch').resolves(
+      makeFetchResponse({
+        status: 403,
+        text: '<!DOCTYPE html><html><body>Sign in</body></html>',
+      }),
+    );
+
+    const result = await handleExecTool(
+      { scriptId: VALID_SCRIPT_ID, js_statement: 'return 2+2', localDir: tmpDir },
+      makeFileOps(), makeSession(), makeDeployOps(),
+    );
+
+    assert.equal(result.success, false);
+    assert.ok(
+      result.error?.includes('browser') || result.error?.includes('authorization'),
+      `got: ${result.error}`,
+    );
+    assert.ok(!result.hints.exports, `exports hint should NOT appear in js_statement mode, got: ${JSON.stringify(result.hints)}`);
+  });
+
   // --- Pre-exec guards ---
 
   it('returns error with pull hint when localDir does not exist', async () => {

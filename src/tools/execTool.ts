@@ -25,8 +25,9 @@ import { GuidanceFragments } from '../utils/guidanceFragments.js';
 export interface ExecToolParams {
   scriptId: string;
   localDir?: string;
+  js_statement?: string;
   module?: string;
-  function: string;
+  function?: string;
   args?: unknown[];
 }
 
@@ -42,7 +43,7 @@ export interface ExecToolResult {
 
 export const EXEC_TOOL_DEFINITION = {
   name: 'exec',
-  description: '[EXEC] Execute a GAS function via web app URL — auto-pushes local files first. WHEN: testing a function, verifying deployed behavior. AVOID: run deploy first if no web app URL exists. Example: exec({scriptId: "1abc...", function: "myFn", args: []})',
+  description: '[EXEC] Execute GAS code via web app URL — auto-pushes local files first. Two modes: (1) function mode: exec({scriptId, function, module?, args?}), (2) js_statement mode: exec({scriptId, js_statement}). WHEN: testing functions, verifying deployed behavior, running ad-hoc JS. AVOID: run deploy first if no web app URL exists.',
   annotations: {
     title: 'Execute GAS Function',
     readOnlyHint: false,
@@ -55,25 +56,32 @@ export const EXEC_TOOL_DEFINITION = {
     properties: {
       ...SchemaFragments.scriptId,
       ...SchemaFragments.localDir,
+      js_statement: {
+        type: 'string',
+        description: 'Raw JavaScript to send directly to executeRawJs(). Mutually exclusive with function/module/args. Must start with "return" to get a non-void result (e.g. "return SpreadsheetApp.getActive().getName()").',
+        minLength: 1,
+      },
       module: {
         type: 'string',
-        description: 'Module path, e.g. "common-js/utils". Calls require(module)[function](...args). Omit to route via runner-api.',
+        description: 'Module path, e.g. "common-js/utils". Calls require(module)[function](...args). Omit to route via runner-api. Cannot be used with js_statement.',
       },
       function: {
         type: 'string',
-        description: 'Function name to execute — must be exported inside _main(): exports.<function> = function() {...}',
+        description: 'Function name — must be exported inside _main(): exports.<function> = function() {...}. Cannot be used with js_statement.',
       },
       args: {
         type: 'array',
-        description: 'Arguments to pass to the function',
+        description: 'Arguments to pass to the function. Cannot be used with js_statement.',
         items: {},
       },
     },
-    required: ['scriptId', 'function'],
+    required: ['scriptId'],
     additionalProperties: false,
     llmGuidance: {
-      requirements: 'Web app deployment must exist — run deploy first if none. Function must be exported inside _main(): exports.myFn = function() { ... }',
-      module: 'Use "common-js/<name>" (e.g. "common-js/utils") to call a module function directly. Omit to route via runner-api (default).',
+      requirements: 'Web app deployment must exist — run deploy first if none.',
+      modes: 'Two mutually exclusive modes: (1) function mode — provide "function" (+ optional "module", "args"); (2) js_statement mode — provide "js_statement" only (no function/module/args).',
+      functionMode: 'Function must be exported inside _main(): exports.myFn = function() { ... }. Use "common-js/<name>" (e.g. "common-js/utils") to call a module function directly. Omit module to route via runner-api (default).',
+      jsStatementMode: 'Send arbitrary JavaScript. MUST prefix with "return" for IIFEs and expressions (e.g. "return SpreadsheetApp.getActive().getName()"). Without "return", result will be undefined. Use require() to call module functions: "return require(\'common-js/utils\').myFn()".',
       autoPush: 'All local files are pushed before execution (with CommonJS validation). Fix validation errors before retrying.',
       browserAuth: 'If exec returns a browser authorization error, open the HEAD deployment URL in Chrome signed in as the script owner, then retry.',
       errorRecovery: GuidanceFragments.errorRecovery,
@@ -100,7 +108,7 @@ export async function handleExecTool(
   sessionManager: SessionManager,
   deployOps: GASDeployOperations
 ): Promise<ExecToolResult> {
-  const { scriptId, localDir, module: moduleName, args } = params;
+  const { scriptId, localDir, js_statement: jsStatementParam, module: moduleName, args } = params;
   const functionName = params.function;
 
   if (!SCRIPT_ID_PATTERN.test(scriptId)) {
@@ -111,29 +119,62 @@ export async function handleExecTool(
     };
   }
 
-  if (!FUNCTION_PATTERN.test(functionName)) {
+  // js_statement mode: send raw JS directly; function mode: build require() call
+  if (jsStatementParam && functionName) {
     return {
       success: false,
-      error: 'Invalid function name',
-      hints: { fix: 'Function name must be a valid JavaScript identifier' },
+      error: 'Cannot provide both js_statement and function — they are mutually exclusive modes',
+      hints: { fix: 'Use js_statement for raw JavaScript, OR function (+ optional module/args) for named function calls. Not both.' },
+    };
+  }
+  if (!jsStatementParam && !functionName) {
+    return {
+      success: false,
+      error: 'Must provide either js_statement or function',
+      hints: { fix: 'Provide js_statement for raw JavaScript (e.g. "return 2+2"), or function for a named function call.' },
+    };
+  }
+  if (jsStatementParam && moduleName) {
+    return {
+      success: false,
+      error: 'Cannot use module with js_statement — module is only for function mode',
+      hints: { fix: 'Use require() inside your js_statement instead: "return require(\'module\').fn()"' },
+    };
+  }
+  if (jsStatementParam && args && args.length > 0) {
+    return {
+      success: false,
+      error: 'Cannot use args with js_statement — args is only for function mode',
+      hints: { fix: 'Embed arguments directly in your js_statement string.' },
     };
   }
 
-  if (functionName.endsWith('_')) {
-    return {
-      success: false,
-      error: `Function "${functionName}" ends with _ — GAS treats trailing-underscore functions as private and they cannot be called externally`,
-      hints: { fix: 'Remove the trailing underscore or rename the function' },
-    };
-  }
+  // Function mode validation: check function name and module name
+  if (functionName) {
+    if (!FUNCTION_PATTERN.test(functionName)) {
+      return {
+        success: false,
+        error: 'Invalid function name',
+        hints: { fix: 'Function name must be a valid JavaScript identifier' },
+      };
+    }
 
-  // Validate moduleName to prevent JS injection via unescaped single quotes in the exec statement
-  if (moduleName !== undefined && !MODULE_NAME_PATTERN.test(moduleName)) {
-    return {
-      success: false,
-      error: 'Invalid module name',
-      hints: { fix: 'Module name must be a valid identifier or path (e.g. "module" or "common-js/module"). No quotes or backticks.' },
-    };
+    if (functionName.endsWith('_')) {
+      return {
+        success: false,
+        error: `Function "${functionName}" ends with _ — GAS treats trailing-underscore functions as private and they cannot be called externally`,
+        hints: { fix: 'Remove the trailing underscore or rename the function' },
+      };
+    }
+
+    // Validate moduleName to prevent JS injection via unescaped single quotes in the exec statement
+    if (moduleName !== undefined && !MODULE_NAME_PATTERN.test(moduleName)) {
+      return {
+        success: false,
+        error: 'Invalid module name',
+        hints: { fix: 'Module name must be a valid identifier or path (e.g. "module" or "common-js/module"). No quotes or backticks.' },
+      };
+    }
   }
 
   const resolvedDir = localDir
@@ -242,16 +283,22 @@ export async function handleExecTool(
       };
     }
 
-    // Build JS statement for the __mcp_exec.gs GET handler.
-    const argsList = (args ?? []).map(a => JSON.stringify(a)).join(', ');
-    const jsStatement = moduleName
-      ? `require('${moduleName}').${functionName}(${argsList})`
-      : `require('runner-api').${functionName}(${argsList})`;
+    // Build JS statement: js_statement mode sends raw JS; function mode builds require() call
+    let jsStatement: string;
+    if (jsStatementParam) {
+      jsStatement = jsStatementParam;
+    } else {
+      const argsList = (args ?? []).map(a => JSON.stringify(a)).join(', ');
+      jsStatement = moduleName
+        ? `require('${moduleName}').${functionName}(${argsList})`
+        : `require('runner-api').${functionName}(${argsList})`;
+    }
 
     const rawResult = await executeRawJs(jsStatement, headUrl, token);
 
     if (!rawResult.success) {
       const isBrowserAuth = rawResult.error?.includes('browser authorization');
+      const isJsStatementMode = !!jsStatementParam;
       return {
         success: false, filesSync,
         error: rawResult.error,
@@ -259,12 +306,22 @@ export async function handleExecTool(
         hints: {
           fix: isBrowserAuth
             ? 'Open the deployment URL in a browser signed in as the script owner, then retry exec'
-            : 'Check the function and module names, ensure function is exported inside _main().',
+            : isJsStatementMode
+              ? 'Check your JavaScript statement for syntax or runtime errors.'
+              : 'Check the function and module names, ensure function is exported inside _main().',
           ...(isBrowserAuth
-            ? { exports: 'Function must be exported inside _main(): exports.myFn = function(){...} — bare function declarations are NOT callable via exec' }
+            ? (!isJsStatementMode ? { exports: 'Function must be exported inside _main(): exports.myFn = function(){...} — bare function declarations are NOT callable via exec' } : {})
             : { invocation: jsStatement }),
         },
       };
+    }
+
+    // Return prefix hint: if js_statement mode and statement doesn't start with 'return', warn
+    const successHints: Record<string, string> = {
+      next: `${jsStatementParam ? 'JavaScript statement' : 'Function'} executed. ${filesSync} files pushed before execution.`,
+    };
+    if (jsStatementParam && !jsStatementParam.trimStart().startsWith('return')) {
+      successHints.returnPrefix = 'js_statement does not start with "return" — result will be undefined for expression-only code. Prefix with "return" for a non-void result.';
     }
 
     return {
@@ -272,9 +329,7 @@ export async function handleExecTool(
       result: rawResult.result,
       logs: rawResult.logs,
       filesSync,
-      hints: {
-        next: `Function executed. ${filesSync} files pushed before execution.`,
-      },
+      hints: successHints,
     };
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
