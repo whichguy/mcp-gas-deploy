@@ -6,8 +6,7 @@
  */
 
 import { GASFileOperations } from '../api/gasFileOperations.js';
-import { pull } from '../sync/rsync.js';
-import { ensureClaspFiles } from '../sync/rsync.js';
+import { pull, ensureClaspFiles } from '../sync/rsync.js';
 import { resolveProject } from '../utils/resolveProject.js';
 import { SchemaFragments } from '../utils/schemaFragments.js';
 import { GuidanceFragments } from '../utils/guidanceFragments.js';

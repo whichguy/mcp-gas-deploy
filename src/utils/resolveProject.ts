@@ -105,7 +105,7 @@ export async function resolveProject(params: {
     if (isOverride) {
       warnings.push(
         `Explicit scriptId (${explicitScriptId}) differs from .clasp.json (${clasp.scriptId}). ` +
-        'Using explicit scriptId. Pass reparent=true to update .clasp.json.'
+        'Using explicit scriptId. Use pull or push with reparent=true to update .clasp.json.'
       );
     }
 

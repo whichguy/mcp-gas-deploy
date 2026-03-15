@@ -553,7 +553,7 @@ export async function push(
   scriptId: string,
   localDir: string,
   fileOps: GASFileOperations,
-  options: { dryRun?: boolean; skipValidation?: boolean; prune?: boolean } = {}
+  options: { dryRun?: boolean; skipValidation?: boolean; prune?: boolean; reparent?: boolean } = {}
 ): Promise<PushResult> {
   return withPushLock(scriptId, async () => {
     try {
@@ -635,7 +635,7 @@ export async function push(
       }
 
       await fileOps.updateProjectFiles(scriptId, orderedFiles);
-      await ensureClaspFiles(localDir, scriptId);
+      await ensureClaspFiles(localDir, scriptId, options.reparent);
 
       return { success: true, filesPushed: allLocalNames, mergeSkipped, gitArchived, archivedFiles };
     } catch (error: unknown) {

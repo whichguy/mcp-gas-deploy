@@ -42,7 +42,7 @@ export class GuidanceFragments {
 
   static readonly claspResolution = [
     'scriptId is optional when localDir contains .clasp.json.',
-    'Resolution: localDir .clasp.json → explicit scriptId → error.',
+    'Resolution cascade: (1) localDir + .clasp.json → read scriptId (explicit scriptId overrides); (2) localDir + explicit scriptId → use explicit; (3) no localDir + explicit scriptId → fallback ~/gas-projects/<scriptId>; (4) neither → error.',
     'Pull and push create .clasp.json automatically.',
     'Pass reparent=true to update .clasp.json when providing a different scriptId.',
   ].join('\n');

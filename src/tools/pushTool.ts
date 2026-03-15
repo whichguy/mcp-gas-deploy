@@ -164,7 +164,7 @@ export async function handlePushTool(
     return handlePreviewAction(scriptId, params, fileOps, resolvedDir);
   }
 
-  const result = await push(scriptId, resolvedDir, fileOps, { dryRun, skipValidation, prune });
+  const result = await push(scriptId, resolvedDir, fileOps, { dryRun, skipValidation, prune, reparent: params.reparent });
 
   if (!result.success) {
     if (result.validationErrors && result.validationErrors.length > 0) {
