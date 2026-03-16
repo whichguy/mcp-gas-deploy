@@ -466,7 +466,7 @@ export function validateFiles(
   const SKIP_FILES = new Set([
     'require', 'require.gs',
     'appsscript', 'appsscript.json',
-    '__mcp_exec', '__mcp_exec_error', '__mcp_exec_success',
+    '__mcp_exec',
     'html_utils',  // raw module, no _main/__defineModule__
   ]);
 

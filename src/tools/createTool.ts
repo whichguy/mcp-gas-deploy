@@ -27,8 +27,6 @@ const RUNTIME_FILES = [
   { src: 'ConfigManager.gs',        dest: 'common-js/ConfigManager.gs' },
   { src: '__mcp_exec.gs',           dest: 'common-js/__mcp_exec.gs' },
   { src: 'html_utils.gs',           dest: 'common-js/html_utils.gs' },
-  { src: '__mcp_exec_success.html', dest: 'common-js/__mcp_exec_success.html' },
-  { src: '__mcp_exec_error.html',   dest: 'common-js/__mcp_exec_error.html' },
 ];
 
 const DEFAULT_OAUTH_SCOPES = [

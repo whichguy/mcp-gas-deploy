@@ -56,8 +56,7 @@ const DEFAULT_PUSH_RESULT: PushResult = {
   success: true,
   filesPushed: [
     'require', 'common-js/ConfigManager', 'common-js/__mcp_exec',
-    'common-js/html_utils', 'common-js/__mcp_exec_success',
-    'common-js/__mcp_exec_error', 'appsscript',
+    'common-js/html_utils', 'appsscript',
   ],
 };
 
@@ -443,7 +442,7 @@ describe('handleCreateTool', () => {
       `RUNTIME_DIR should end with /runtime, got: ${RUNTIME_DIR}`);
   });
 
-  it('RUNTIME_FILES has exactly 6 entries', () => {
-    assert.equal(RUNTIME_FILES.length, 6);
+  it('RUNTIME_FILES has exactly 4 entries', () => {
+    assert.equal(RUNTIME_FILES.length, 4);
   });
 });

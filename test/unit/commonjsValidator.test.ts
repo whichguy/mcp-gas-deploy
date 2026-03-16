@@ -270,13 +270,14 @@ __defineModule__(_main, true);`;
       assert.equal(results.length, 0);
     });
 
-    it('skips __mcp_exec_error and __mcp_exec_success', () => {
+    it('does not skip removed __mcp_exec_error and __mcp_exec_success files', () => {
       const files = [
         { name: 'common-js/__mcp_exec_error.gs', source: 'exports.x = 1;', position: 1 },
         { name: 'common-js/__mcp_exec_success.gs', source: 'exports.y = 2;', position: 2 },
       ];
       const results = validateFiles(files, { skipRequirePositionCheck: true });
-      assert.equal(results.length, 0);
+      // These are no longer in SKIP_FILES — they'd be validated as normal .gs files
+      assert.equal(results.length, 2);
     });
 
     it('still validates user modules in common-js/ subdirectory', () => {
