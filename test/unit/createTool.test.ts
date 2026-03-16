@@ -157,6 +157,7 @@ describe('handleCreateTool', () => {
     assert.equal(manifest.webapp.access, 'MYSELF');
     assert.ok(manifest.oauthScopes.includes('https://www.googleapis.com/auth/script.scriptapp'));
     assert.ok(manifest.oauthScopes.includes('https://www.googleapis.com/auth/script.external_request'));
+    assert.deepEqual(manifest.executionApi, { access: 'MYSELF' }, 'executionApi should be set for scripts.run');
   });
 
   it('merges custom oauthScopes (deduped)', async () => {

@@ -108,7 +108,7 @@ export const CREATE_TOOL_DEFINITION = {
     additionalProperties: false,
     llmGuidance: {
       workflow: GuidanceFragments.createWorkflow,
-      next: 'After create, run deploy (staging) → visit HEAD URL for browser auth → exec.',
+      next: 'After create, run exec directly via scripts.run (no deploy or browser auth needed). For stable web app URLs: deploy (staging) → promote (prod).',
       resolution: GuidanceFragments.claspResolution,
       errorRecovery: GuidanceFragments.errorRecovery,
     },
@@ -246,6 +246,9 @@ export async function handleCreateTool(
         executeAs: params.webapp?.executeAs ?? 'USER_DEPLOYING',
         access: params.webapp?.access ?? 'MYSELF',
       },
+      executionApi: {
+        access: 'MYSELF',
+      },
       oauthScopes: baseScopes,
     };
     const manifestPath = path.join(localDir, 'appsscript.json');
@@ -302,7 +305,7 @@ export async function handleCreateTool(
       runtimeIncluded: true,
       filesPushed: pushResult.filesPushed,
       hints: {
-        next: 'Run deploy to create a staging deployment, then visit HEAD URL in Chrome for browser auth, then exec.',
+        next: 'Project ready. Run exec directly (scripts.run, no deploy or browser auth needed). For stable web app URLs: deploy (staging) → promote (prod).',
         commonjs: GuidanceFragments.commonJsPattern,
       },
     };

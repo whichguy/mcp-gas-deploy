@@ -30,6 +30,10 @@ export interface DeploymentInfo {
   prodConsumerScriptId?: string;        // Prod consumer project scriptId
   prodConsumerDeploymentId?: string;    // Optional: prod consumer web-app deployment ID
 
+  // scripts.run support (set by fork tool)
+  gcpSwitched?: boolean;              // true when GCP project switch succeeded — exec uses scripts.run
+  spreadsheetId?: string;             // bound spreadsheet ID for context passing (optional)
+
   // Circular buffer slots (auto-managed — never set manually)
   // Staging slots: up to 4 source deployment slot IDs (0-indexed, fills in order: 0→1→2→3→cycle)
   stagingSlotIds?: string[];                        // source deployment slot IDs (slots 1–4, 0-indexed)

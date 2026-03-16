@@ -560,4 +560,148 @@ describe('handleExecTool', () => {
     assert.equal(result.success, false);
     assert.ok(result.error?.includes('No scriptId provided'), `got: ${result.error}`);
   });
+
+  // --- scripts.run path (gcpSwitched) ---
+
+  describe('scripts.run mode (gcpSwitched)', () => {
+    let originalFetch: typeof globalThis.fetch;
+
+    beforeEach(() => {
+      originalFetch = globalThis.fetch;
+    });
+
+    afterEach(() => {
+      globalThis.fetch = originalFetch;
+    });
+
+    it('uses scripts.run when gcpSwitched is true', async () => {
+      await writeDeployConfig(tmpDir, {
+        [VALID_SCRIPT_ID]: { gcpSwitched: true } as Record<string, unknown>,
+      } as Record<string, unknown>);
+
+      let capturedUrl = '';
+      globalThis.fetch = (async (url: string | URL | Request) => {
+        capturedUrl = url as string;
+        return new Response(JSON.stringify({
+          done: true,
+          response: { result: { success: true, result: 42 } },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }) as typeof globalThis.fetch;
+
+      const result = await handleExecTool(
+        { scriptId: VALID_SCRIPT_ID, localDir: tmpDir, js_statement: 'return 42' },
+        makeFileOps(), makeSession(), makeDeployOps(),
+      );
+
+      assert.equal(result.success, true, `expected success, got: ${result.error}`);
+      assert.equal(result.result, 42);
+      assert.ok(capturedUrl.includes('scripts.run') || capturedUrl.includes(':run'));
+      assert.ok(result.hints.execMode?.includes('scripts.run'));
+    });
+
+    it('skips deployment URL check when gcpSwitched', async () => {
+      // No deployment URLs in config — should NOT fail
+      await writeDeployConfig(tmpDir, {
+        [VALID_SCRIPT_ID]: { gcpSwitched: true } as Record<string, unknown>,
+      } as Record<string, unknown>);
+
+      globalThis.fetch = (async () => {
+        return new Response(JSON.stringify({
+          done: true,
+          response: { result: { success: true, result: 'ok' } },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }) as typeof globalThis.fetch;
+
+      const result = await handleExecTool(
+        { scriptId: VALID_SCRIPT_ID, localDir: tmpDir, js_statement: 'return "ok"' },
+        makeFileOps(), makeSession(), makeDeployOps(),
+      );
+
+      assert.equal(result.success, true, `expected success without deploy URLs, got: ${result.error}`);
+    });
+
+    it('passes spreadsheetId when present in config', async () => {
+      await writeDeployConfig(tmpDir, {
+        [VALID_SCRIPT_ID]: { gcpSwitched: true, spreadsheetId: 'sheet123' } as Record<string, unknown>,
+      } as Record<string, unknown>);
+
+      let capturedBody = '';
+      globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+        capturedBody = init?.body as string;
+        return new Response(JSON.stringify({
+          done: true,
+          response: { result: { success: true, result: null } },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }) as typeof globalThis.fetch;
+
+      await handleExecTool(
+        { scriptId: VALID_SCRIPT_ID, localDir: tmpDir, js_statement: 'return null' },
+        makeFileOps(), makeSession(), makeDeployOps(),
+      );
+
+      const body = JSON.parse(capturedBody);
+      assert.equal(body.parameters[0].spreadsheetId, 'sheet123');
+    });
+
+    it('returns scripts.run error with hints', async () => {
+      await writeDeployConfig(tmpDir, {
+        [VALID_SCRIPT_ID]: { gcpSwitched: true } as Record<string, unknown>,
+      } as Record<string, unknown>);
+
+      globalThis.fetch = (async () => {
+        return new Response('Not Found', { status: 404 });
+      }) as typeof globalThis.fetch;
+
+      const result = await handleExecTool(
+        { scriptId: VALID_SCRIPT_ID, localDir: tmpDir, js_statement: 'return 1' },
+        makeFileOps(), makeSession(), makeDeployOps(),
+      );
+
+      assert.equal(result.success, false);
+      assert.ok(result.error?.includes('404'));
+      assert.ok(result.hints.execMode?.includes('scripts.run'));
+    });
+
+    it('does not emit browserAuth hint for gcpSwitched projects', async () => {
+      await writeDeployConfig(tmpDir, {
+        [VALID_SCRIPT_ID]: { gcpSwitched: true } as Record<string, unknown>,
+      } as Record<string, unknown>);
+
+      globalThis.fetch = (async () => {
+        return new Response(JSON.stringify({
+          done: true,
+          response: { result: { success: false, error: 'test error' } },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }) as typeof globalThis.fetch;
+
+      const result = await handleExecTool(
+        { scriptId: VALID_SCRIPT_ID, localDir: tmpDir, js_statement: 'return x' },
+        makeFileOps(), makeSession(), makeDeployOps(),
+      );
+
+      assert.equal(result.success, false);
+      assert.ok(!result.hints.browserAuth, 'should not emit browserAuth for gcpSwitched');
+    });
+
+    it('returns returnPrefix warning for scripts.run mode too', async () => {
+      await writeDeployConfig(tmpDir, {
+        [VALID_SCRIPT_ID]: { gcpSwitched: true } as Record<string, unknown>,
+      } as Record<string, unknown>);
+
+      globalThis.fetch = (async () => {
+        return new Response(JSON.stringify({
+          done: true,
+          response: { result: { success: true, result: undefined } },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }) as typeof globalThis.fetch;
+
+      const result = await handleExecTool(
+        { scriptId: VALID_SCRIPT_ID, localDir: tmpDir, js_statement: '2+2' },
+        makeFileOps(), makeSession(), makeDeployOps(),
+      );
+
+      assert.equal(result.success, true);
+      assert.ok(result.hints.returnPrefix?.includes('return'));
+    });
+  });
 });

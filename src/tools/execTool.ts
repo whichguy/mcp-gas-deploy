@@ -17,6 +17,7 @@ import { resolveProject } from '../utils/resolveProject.js';
 import { SessionManager } from '../auth/sessionManager.js';
 import { FUNCTION_PATTERN, MODULE_NAME_PATTERN } from '../utils/validation.js';
 import { executeRawJs } from '../utils/gasExecutor.js';
+import { executeViaScriptsRun } from '../utils/scriptsRunExecutor.js';
 import type { ValidationResult } from '../validation/commonjsValidator.js';
 import { SchemaFragments } from '../utils/schemaFragments.js';
 import { GuidanceFragments } from '../utils/guidanceFragments.js';
@@ -42,7 +43,7 @@ export interface ExecToolResult {
 
 export const EXEC_TOOL_DEFINITION = {
   name: 'exec',
-  description: '[EXEC] Execute GAS code via web app URL — auto-pushes local files first. Two modes: (1) function mode: exec({scriptId, function, module?, args?}), (2) js_statement mode: exec({scriptId, js_statement}). WHEN: testing functions, verifying deployed behavior, running ad-hoc JS. AVOID: run deploy first if no web app URL exists.',
+  description: '[EXEC] Run GAS code — auto-pushes local files first. Uses scripts.run (no browser auth) for GCP-switched projects, web app URL otherwise. Two modes: (1) function mode: exec({scriptId, function, module?, args?}), (2) js_statement mode: exec({scriptId, js_statement}). WHEN: testing functions, verifying deployed behavior, running ad-hoc JS.',
   annotations: {
     title: 'Execute GAS Function',
     readOnlyHint: false,
@@ -77,13 +78,13 @@ export const EXEC_TOOL_DEFINITION = {
     required: [],
     additionalProperties: false,
     llmGuidance: {
-      requirements: 'Web app deployment must exist — run deploy first if none.',
+      requirements: 'For GCP-switched projects (forks): no deployment needed — scripts.run works directly. For non-switched projects: web app deployment must exist.',
       resolution: GuidanceFragments.claspResolution,
       modes: 'Two mutually exclusive modes: (1) function mode — provide "function" (+ optional "module", "args"); (2) js_statement mode — provide "js_statement" only (no function/module/args).',
       functionMode: 'Function must be exported inside _main(): exports.myFn = function() { ... }. Use "common-js/<name>" (e.g. "common-js/utils") to call a module function directly. Omit module to route via runner-api (default).',
       jsStatementMode: 'Send arbitrary JavaScript. MUST prefix with "return" for IIFEs and expressions (e.g. "return SpreadsheetApp.getActive().getName()"). Without "return", result will be undefined. Use require() to call module functions: "return require(\'common-js/utils\').myFn()".',
       autoPush: 'All local files are pushed before execution (with CommonJS validation). Fix validation errors before retrying.',
-      browserAuth: 'If exec returns a browser authorization error, open the HEAD deployment URL in Chrome signed in as the script owner, then retry.',
+      browserAuth: 'For GCP-switched projects (forks), no browser auth needed — scripts.run bypasses web app consent. For non-switched projects, browser auth may be required on first use.',
       errorRecovery: GuidanceFragments.errorRecovery,
     },
   },
@@ -194,45 +195,49 @@ export async function handleExecTool(
     };
   }
 
-  // Check for any deployment URL (pre-exec guard — ensures deploy has been run)
+  // Read deploy config for routing decision
   const deployInfo = await getDeploymentInfo(resolvedDir, scriptId);
-  const anyUrl = deployInfo.headUrl ?? deployInfo.stagingUrl ?? deployInfo.prodUrl;
+  const isGcpSwitched = !!(deployInfo as Record<string, unknown>).gcpSwitched;
 
-  if (!anyUrl) {
-    return {
-      success: false,
-      error: 'No deployment URL found',
-      hints: { fix: 'No deployment URL found in gas-deploy.json (checked headUrl, stagingUrl, prodUrl). Run action=deploy to create a web app deployment, then retry exec.' },
-    };
-  }
-
-  // Resolve the HEAD deployment URL (ends in /dev) — required for ?_mcp_run=true.
-  // Versioned /exec URLs redirect back to /exec even with /dev appended; only a true
-  // HEAD deployment returns a /dev URL that accepts dynamic execution.
-  let headUrl = deployInfo.headUrl;
-  if (!headUrl) {
-    try {
-      const headDeployment = await deployOps.getOrCreateHeadDeployment(scriptId);
-      if (!headDeployment.webAppUrl) {
-        return {
-          success: false,
-          error: 'HEAD deployment created but returned no web app URL — ensure the script has a web app entry point configured in appsscript.json',
-          hints: { fix: 'Add webapp access config to appsscript.json, redeploy, then retry' },
-        };
-      }
-      headUrl = headDeployment.webAppUrl;
-      // Cache for future calls
-      await setDeploymentInfo(resolvedDir, scriptId, {
-        headUrl,
-        headDeploymentId: headDeployment.deploymentId,
-      });
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : String(error);
+  // Pre-exec guard: non-GCP-switched projects need a deployment URL
+  if (!isGcpSwitched) {
+    const anyUrl = deployInfo.headUrl ?? deployInfo.stagingUrl ?? deployInfo.prodUrl;
+    if (!anyUrl) {
       return {
         success: false,
-        error: `Failed to get HEAD deployment: ${message}`,
-        hints: { fix: 'Check authentication and ensure the script has a web app entry point' },
+        error: 'No deployment URL found',
+        hints: { fix: 'No deployment URL found in gas-deploy.json (checked headUrl, stagingUrl, prodUrl). Run action=deploy to create a web app deployment, or use fork to enable scripts.run (no deploy needed).' },
       };
+    }
+  }
+
+  // Resolve HEAD URL for web-app path (skip for GCP-switched)
+  let headUrl: string | undefined;
+  if (!isGcpSwitched) {
+    headUrl = deployInfo.headUrl;
+    if (!headUrl) {
+      try {
+        const headDeployment = await deployOps.getOrCreateHeadDeployment(scriptId);
+        if (!headDeployment.webAppUrl) {
+          return {
+            success: false,
+            error: 'HEAD deployment created but returned no web app URL — ensure the script has a web app entry point configured in appsscript.json',
+            hints: { fix: 'Add webapp access config to appsscript.json, redeploy, then retry' },
+          };
+        }
+        headUrl = headDeployment.webAppUrl;
+        await setDeploymentInfo(resolvedDir, scriptId, {
+          headUrl,
+          headDeploymentId: headDeployment.deploymentId,
+        });
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+        return {
+          success: false,
+          error: `Failed to get HEAD deployment: ${message}`,
+          hints: { fix: 'Check authentication and ensure the script has a web app entry point' },
+        };
+      }
     }
   }
 
@@ -266,29 +271,78 @@ export async function handleExecTool(
     };
   }
 
-  // Execute via web app URL
-  try {
-    const token = await sessionManager.getValidToken();
-    if (!token) {
+  // Get auth token
+  const token = await sessionManager.getValidToken();
+  if (!token) {
+    return {
+      success: false,
+      error: 'Not authenticated',
+      hints: { fix: 'Run auth with action="login"' },
+    };
+  }
+
+  // Build JS statement: js_statement mode sends raw JS; function mode builds require() call
+  let jsStatement: string;
+  if (jsStatementParam) {
+    jsStatement = jsStatementParam;
+  } else {
+    const argsList = (args ?? []).map(a => JSON.stringify(a)).join(', ');
+    jsStatement = moduleName
+      ? `require('${moduleName}').${functionName}(${argsList})`
+      : `require('runner-api').${functionName}(${argsList})`;
+  }
+
+  // --- Execute: branch on gcpSwitched ---
+  if (isGcpSwitched) {
+    // scripts.run path — no browser auth, no deployment URL needed
+    try {
+      const spreadsheetId = (deployInfo as Record<string, unknown>).spreadsheetId as string | undefined;
+      const runResult = await executeViaScriptsRun(scriptId, jsStatement, token, { spreadsheetId });
+
+      if (!runResult.success) {
+        return {
+          success: false, filesSync,
+          error: runResult.error,
+          hints: {
+            fix: runResult.hint ?? 'Check JavaScript syntax and ensure apiExec function exists.',
+            execMode: 'scripts.run (auth-free)',
+            invocation: jsStatement,
+          },
+        };
+      }
+
+      const successHints: Record<string, string> = { execMode: 'scripts.run (auth-free)' };
+      if (resolved.resolvedFrom === 'clasp-json') {
+        successHints.scriptId = `Using scriptId ${scriptId} from .clasp.json`;
+      }
+      successHints.next = `${jsStatementParam ? 'JavaScript statement' : 'Function'} executed via scripts.run. ${filesSync} files pushed before execution.`;
+      if (jsStatementParam && !jsStatementParam.trimStart().startsWith('return')) {
+        successHints.returnPrefix = 'js_statement does not start with "return" — result will be undefined for expression-only code. Prefix with "return" for a non-void result.';
+      }
+
       return {
-        success: false,
-        error: 'Not authenticated',
-        hints: { fix: 'Run auth with action="login"' },
+        success: true,
+        result: runResult.result,
+        logs: runResult.logs,
+        filesSync,
+        hints: successHints,
+      };
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        success: false, filesSync,
+        error: `scripts.run execution failed: ${message}`,
+        hints: {
+          fix: 'Check scripts.run error details. Ensure GCP project is switched and apiExec function exists.',
+          execMode: 'scripts.run (auth-free)',
+        },
       };
     }
+  }
 
-    // Build JS statement: js_statement mode sends raw JS; function mode builds require() call
-    let jsStatement: string;
-    if (jsStatementParam) {
-      jsStatement = jsStatementParam;
-    } else {
-      const argsList = (args ?? []).map(a => JSON.stringify(a)).join(', ');
-      jsStatement = moduleName
-        ? `require('${moduleName}').${functionName}(${argsList})`
-        : `require('runner-api').${functionName}(${argsList})`;
-    }
-
-    const rawResult = await executeRawJs(jsStatement, headUrl, token);
+  // --- Web app path (non-GCP-switched) ---
+  try {
+    const rawResult = await executeRawJs(jsStatement, headUrl!, token);
 
     if (!rawResult.success) {
       const isBrowserAuth = rawResult.error?.includes('browser authorization');
