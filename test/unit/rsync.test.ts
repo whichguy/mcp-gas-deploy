@@ -1324,3 +1324,112 @@ describe('pull — double-extension guard', () => {
     assert.ok(!result.filesPulled.includes('sidebar.html.html'), 'should NOT have double extension');
   });
 });
+
+// --- .claspignore integration ---
+
+describe('.claspignore filtering', () => {
+  let tmpDir: string;
+  const validGs = `function _main() { exports.fn = function() {}; }\n__defineModule__(_main, false);`;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'rsync-claspignore-'));
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+    sinon.restore();
+  });
+
+  it('push excludes files matching .claspignore patterns', async () => {
+    await fs.writeFile(path.join(tmpDir, 'main.gs'), validGs, 'utf-8');
+    await fs.writeFile(path.join(tmpDir, 'main.test.gs'), validGs, 'utf-8');
+    await fs.writeFile(path.join(tmpDir, '.claspignore'), '*.test.gs\n', 'utf-8');
+    const fileOps = makeFileOps([]);
+
+    const result = await push('scriptId', tmpDir, fileOps, { skipValidation: true });
+
+    assert.ok(result.success);
+    assert.ok(result.filesPushed.includes('main'), 'main should be pushed');
+    assert.ok(!result.filesPushed.includes('main.test'), 'test file should be excluded');
+  });
+
+  it('status excludes .claspignore files from localOnly', async () => {
+    await fs.writeFile(path.join(tmpDir, 'main.gs'), '// main', 'utf-8');
+    await fs.writeFile(path.join(tmpDir, 'main.test.gs'), '// test', 'utf-8');
+    await fs.writeFile(path.join(tmpDir, '.claspignore'), '*.test.gs\n', 'utf-8');
+    const fileOps = makeFileOps([]);
+
+    const status = await getStatus('scriptId', tmpDir, fileOps);
+
+    const localNames = status.localOnly.map(f => f.name);
+    assert.ok(localNames.includes('main'), 'main should appear in localOnly');
+    assert.ok(!localNames.includes('main.test'), 'test file should not appear in localOnly');
+  });
+
+  it('directory pattern excludes entire directory', async () => {
+    await fs.writeFile(path.join(tmpDir, 'main.gs'), validGs, 'utf-8');
+    await fs.mkdir(path.join(tmpDir, 'test'), { recursive: true });
+    await fs.writeFile(path.join(tmpDir, 'test', 'suite.gs'), validGs, 'utf-8');
+    await fs.writeFile(path.join(tmpDir, '.claspignore'), 'test/**\n', 'utf-8');
+    const fileOps = makeFileOps([]);
+
+    const result = await push('scriptId', tmpDir, fileOps, { skipValidation: true });
+
+    assert.ok(result.success);
+    assert.ok(result.filesPushed.includes('main'));
+    assert.ok(!result.filesPushed.includes('test/suite'), 'test dir files should be excluded');
+  });
+
+  it('negation pattern overrides exclusion', async () => {
+    await fs.writeFile(path.join(tmpDir, 'a.test.gs'), validGs, 'utf-8');
+    await fs.writeFile(path.join(tmpDir, 'critical.test.gs'), validGs, 'utf-8');
+    await fs.writeFile(path.join(tmpDir, '.claspignore'), '*.test.gs\n!critical.test.gs\n', 'utf-8');
+    const fileOps = makeFileOps([]);
+
+    const result = await push('scriptId', tmpDir, fileOps, { skipValidation: true });
+
+    assert.ok(result.success);
+    assert.ok(!result.filesPushed.includes('a.test'), 'a.test should be excluded');
+    assert.ok(result.filesPushed.includes('critical.test'), 'critical.test should be included via negation');
+  });
+
+  it('no .claspignore preserves existing behavior', async () => {
+    await fs.writeFile(path.join(tmpDir, 'main.gs'), validGs, 'utf-8');
+    await fs.writeFile(path.join(tmpDir, 'util.gs'), validGs, 'utf-8');
+    const fileOps = makeFileOps([]);
+
+    const result = await push('scriptId', tmpDir, fileOps, { skipValidation: true });
+
+    assert.ok(result.success);
+    assert.equal(result.filesPushed.length, 2);
+  });
+
+  it('hidden files and gas-deploy.json still excluded with empty .claspignore', async () => {
+    await fs.writeFile(path.join(tmpDir, 'main.gs'), validGs, 'utf-8');
+    await fs.writeFile(path.join(tmpDir, '.secret'), 'hidden', 'utf-8');
+    await fs.writeFile(path.join(tmpDir, 'gas-deploy.json'), '{}', 'utf-8');
+    await fs.writeFile(path.join(tmpDir, '.claspignore'), '', 'utf-8');
+    const fileOps = makeFileOps([]);
+
+    const result = await push('scriptId', tmpDir, fileOps, { skipValidation: true });
+
+    assert.ok(result.success);
+    assert.deepEqual(result.filesPushed, ['main']);
+  });
+
+  it('pull is NOT filtered by .claspignore', async () => {
+    // .claspignore excludes test files, but pull should get everything from remote
+    await fs.writeFile(path.join(tmpDir, '.claspignore'), '*.test.gs\n', 'utf-8');
+    const fileOps = makeFileOps([
+      gasFile('main', '// main'),
+      gasFile('main.test', '// test'),
+    ]);
+
+    const result = await pull('scriptId', tmpDir, fileOps);
+
+    assert.ok(result.success);
+    assert.equal(result.filesPulled.length, 2, 'pull should fetch all files regardless of .claspignore');
+    assert.ok(result.filesPulled.includes('main.gs'));
+    assert.ok(result.filesPulled.includes('main.test.gs'));
+  });
+});

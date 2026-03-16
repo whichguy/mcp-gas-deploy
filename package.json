@@ -24,6 +24,7 @@
     "@modelcontextprotocol/sdk": "^1.27.0",
     "google-auth-library": "^10.6.1",
     "googleapis": "^140.0.0",
+    "ignore": "^7.0.5",
     "open": "^11.0.0"
   },
   "devDependencies": {

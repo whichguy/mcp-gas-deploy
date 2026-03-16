@@ -489,6 +489,40 @@ describe('handleStatusTool', () => {
     });
   });
 
+  // --- .claspignore hints ---
+
+  describe('.claspignore hints', () => {
+    it('shows claspIgnore hint when .claspignore exists', async () => {
+      await fs.writeFile(path.join(tmpDir, 'main.gs'), '// main', 'utf-8');
+      await fs.writeFile(path.join(tmpDir, '.claspignore'), '*.test.gs\nscratch.gs\n', 'utf-8');
+      const fileOps = makeFileOps([gasFile('main', '// main')]);
+
+      const result = await handleStatusTool(
+        { scriptId: VALID_SCRIPT_ID, localDir: tmpDir },
+        fileOps
+      );
+
+      assert.equal(result.success, true);
+      assert.ok(result.hints.claspIgnore, 'hints.claspIgnore should be present');
+      assert.ok(result.hints.claspIgnore.includes('2 patterns'));
+      assert.equal(result.claspIgnoreActive, true);
+    });
+
+    it('no claspIgnore hint when .claspignore is absent', async () => {
+      await fs.writeFile(path.join(tmpDir, 'main.gs'), '// main', 'utf-8');
+      const fileOps = makeFileOps([gasFile('main', '// main')]);
+
+      const result = await handleStatusTool(
+        { scriptId: VALID_SCRIPT_ID, localDir: tmpDir },
+        fileOps
+      );
+
+      assert.equal(result.success, true);
+      assert.equal(result.hints.claspIgnore, undefined);
+      assert.equal(result.claspIgnoreActive, undefined);
+    });
+  });
+
   // --- .clasp.json resolution ---
 
   describe('.clasp.json resolution', () => {

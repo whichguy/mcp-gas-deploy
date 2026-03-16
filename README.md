@@ -61,8 +61,8 @@ The server requests these scopes automatically during login:
 | `create` | Create a new GAS project + bootstrap local directory | `title`, `localDir?`, `parentId?` |
 | `ls` | List files in a GAS project (metadata only) | `scriptId?`, `localDir?`, `path?`, `type?` |
 | `pull` | Download GAS project files to existing local directory | `scriptId?`, `localDir?` |
-| `status` | Compare local vs remote by content hash | `scriptId?`, `localDir?` |
-| `push` | Push local files to GAS with CommonJS validation | `scriptId?`, `localDir?`, `action?` (`push`\|`preview`), `prune?` |
+| `status` | Compare local vs remote by content hash; respects `.claspignore` | `scriptId?`, `localDir?` |
+| `push` | Push local files to GAS with CommonJS validation; respects `.claspignore` | `scriptId?`, `localDir?`, `action?` (`push`\|`preview`), `prune?` |
 | `exec` | Execute a GAS function (auto-pushes first) | `scriptId?`, `localDir?`, `function`, `module?`, `args?` |
 | `deploy` | Deploy / rollback / promote / list-versions | `scriptId?`, `localDir?`, `action` |
 | `projects` | List or search standalone GAS projects | `action`, `query?` |
@@ -105,14 +105,25 @@ Deployments use a **4-slot circular buffer** per environment (staging and produc
 
 All deployment state is tracked in `gas-deploy.json`, which is written only after the GAS API call succeeds.
 
+## `.claspignore` Support
+
+Place a `.claspignore` file in your local project directory to exclude files from `push`, `status`, and `preview`. Uses gitignore-style patterns (powered by the [`ignore`](https://www.npmjs.com/package/ignore) library).
+
+```
+# Example .claspignore
+*.test.gs
+scratch.gs
+test/**
+```
+
+**Scope:**
+- **push / status / preview**: filtered — excluded files are not pushed and don't appear in status
+- **pull**: NOT filtered — all remote files are always fetched (matches clasp behavior)
+- **deploy / promote**: inherits filtering via push — version snapshots reflect the filtered file set
+
+Patterns apply **after** hardcoded filters (hidden files, extension whitelist, `gas-deploy.json`), so `.claspignore` can only narrow the set further. When `.claspignore` is active, tool results include a `claspIgnoreActive` flag and a hint showing the pattern count.
+
 ## Push Side-Effects
-
-Every successful `push` (non-dryRun) automatically:
-
-- Writes **`.clasp.json`** with the project's `scriptId` (for clasp CLI compatibility).
-- Ensures **`.gitignore`** lists `.clasp.json` (creates the file if absent; appends if not listed).
-
-Both files start with `.` so `readLocalFiles()` skips them — they are never pushed to GAS.
 
 **Deleted-file recovery:** Before any remote-only file can be lost during a push, `gitArchiveRemoteOnly()` uses a two-commit git pattern — writes the file to disk, commits it, deletes it, commits the removal. Deleted files are fully recoverable:
 

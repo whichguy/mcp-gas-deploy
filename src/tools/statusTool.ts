@@ -11,6 +11,7 @@ import { getDeploymentInfo, type DeploymentInfo, STALE_THRESHOLD_MS } from '../c
 import { resolveProject } from '../utils/resolveProject.js';
 import { SchemaFragments } from '../utils/schemaFragments.js';
 import { GuidanceFragments } from '../utils/guidanceFragments.js';
+import { loadClaspIgnore } from '../sync/claspIgnore.js';
 
 function buildStalenessHints(
   info: DeploymentInfo | undefined,
@@ -80,6 +81,7 @@ export interface StatusToolResult {
   hints: Record<string, string>;
   /** Known deployment URLs from gas-deploy.json — absent if gas-deploy.json does not exist */
   deployments?: DeploymentUrls;
+  claspIgnoreActive?: boolean;
 }
 
 export const STATUS_TOOL_DEFINITION = {
@@ -104,6 +106,7 @@ export const STATUS_TOOL_DEFINITION = {
       deploymentUrls: 'Response includes head (dev), staging, and prod URLs when gas-deploy.json exists. Use these URLs for browser testing.',
       staleness: 'Staleness hints appear when prod is behind staging or local changes are pending. Follow the suggested action.',
       resolution: GuidanceFragments.claspResolution,
+      claspIgnore: GuidanceFragments.claspIgnore,
       circularBuffer: GuidanceFragments.circularBuffer,
       errorRecovery: GuidanceFragments.errorRecovery,
     },
@@ -126,6 +129,7 @@ export const STATUS_TOOL_DEFINITION = {
       },
       error: { type: 'string' },
       hints: { type: 'object', additionalProperties: { type: 'string' } },
+      claspIgnoreActive: { type: 'boolean' },
     },
     required: ['success', 'summary'],
   },
@@ -251,7 +255,12 @@ export async function handleStatusTool(
       // Suppress — deployment info is optional; missing config is not a status error
     }
 
-    return { success: true, status, summary, hints, deployments };
+    const claspIgnore = await loadClaspIgnore(resolvedDir);
+    if (claspIgnore.active) {
+      hints.claspIgnore = `.claspignore active (${claspIgnore.patternCount} patterns) — some local files excluded from status`;
+    }
+
+    return { success: true, status, summary, hints, deployments, claspIgnoreActive: claspIgnore.active || undefined };
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
     return {

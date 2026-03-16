@@ -53,6 +53,12 @@ export class GuidanceFragments {
     'Runtime files are bundled with mcp-gas-deploy — no external config needed.',
   ].join('\n');
 
+  static readonly claspIgnore = [
+    '.claspignore (gitignore-style) filters local files from push/status/preview.',
+    'Patterns apply AFTER hardcoded filters (hidden files, extension whitelist).',
+    'Pull is NOT filtered — all remote files are fetched regardless of .claspignore.',
+  ].join('\n');
+
   static readonly propertiesCopyWorkflow = [
     'Script properties are NOT copied automatically. To copy them:',
     '1. exec in SOURCE project: require("runner-api").getScriptProperties() — returns all key/value pairs.',
