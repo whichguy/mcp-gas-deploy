@@ -152,6 +152,46 @@ describe('gasExecutor', () => {
       assert.equal(opts.body, JSON.stringify({ func: '1+1' }));
     });
 
+    it('coerces object error to JSON string', async () => {
+      sinon.stub(globalThis, 'fetch').resolves(
+        makeFetchResponse({ status: 200, json: { success: false, error: { message: 'forbidden', code: 403 } } }),
+      );
+
+      const result = await executeRawJs('badFn()', HEAD_URL, TOKEN);
+      assert.equal(result.success, false);
+      assert.equal(result.error, '{"message":"forbidden","code":403}');
+    });
+
+    it('coerces numeric error to string', async () => {
+      sinon.stub(globalThis, 'fetch').resolves(
+        makeFetchResponse({ status: 200, json: { success: false, error: 500 } }),
+      );
+
+      const result = await executeRawJs('badFn()', HEAD_URL, TOKEN);
+      assert.equal(result.success, false);
+      assert.equal(result.error, '500');
+    });
+
+    it('returns fallback for null error', async () => {
+      sinon.stub(globalThis, 'fetch').resolves(
+        makeFetchResponse({ status: 200, json: { success: false, error: null } }),
+      );
+
+      const result = await executeRawJs('badFn()', HEAD_URL, TOKEN);
+      assert.equal(result.success, false);
+      assert.equal(result.error, 'Unknown execution error');
+    });
+
+    it('passes through string error unchanged', async () => {
+      sinon.stub(globalThis, 'fetch').resolves(
+        makeFetchResponse({ status: 200, json: { success: false, error: 'TypeError: x is not a function' } }),
+      );
+
+      const result = await executeRawJs('badFn()', HEAD_URL, TOKEN);
+      assert.equal(result.success, false);
+      assert.equal(result.error, 'TypeError: x is not a function');
+    });
+
     it('returns GAS execution error with logs', async () => {
       sinon.stub(globalThis, 'fetch').resolves(
         makeFetchResponse({ status: 200, json: { success: false, error: 'ReferenceError', logger_output: 'debug' } }),

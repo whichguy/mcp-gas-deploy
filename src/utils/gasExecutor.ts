@@ -139,7 +139,11 @@ export async function executeRawJs(
   if (data.success !== true) {
     return {
       success: false,
-      error: data.error ?? 'Unknown execution error',
+      error: typeof data.error === 'string'
+        ? data.error
+        : data.error != null
+          ? JSON.stringify(data.error)
+          : 'Unknown execution error',
       logs: data.logger_output,
     };
   }
