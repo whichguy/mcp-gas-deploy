@@ -293,20 +293,38 @@ export async function handleExecTool(
     if (!rawResult.success) {
       const isBrowserAuth = rawResult.error?.includes('browser authorization');
       const isJsStatementMode = !!jsStatementParam;
+
+      const hints: Record<string, string> = {
+        fix: isBrowserAuth
+          ? 'Open the deployment URL in a browser signed in as the script owner, then retry exec'
+          : isJsStatementMode
+            ? 'Check your JavaScript statement for syntax or runtime errors.'
+            : 'Check the function and module names, ensure function is exported inside _main().',
+      };
+
+      if (isBrowserAuth) {
+        if (!isJsStatementMode) {
+          hints.exports = 'Function must be exported inside _main(): exports.myFn = function(){...} — bare function declarations are NOT callable via exec';
+        }
+        hints.browserAuth = [
+          `Automate browser auth with chrome-devtools MCP:`,
+          `1. mcp__chrome-devtools__navigate_page url="${headUrl}" — opens the auth page`,
+          `2. mcp__chrome-devtools__wait_for text="You need to authorize" — wait for consent UI`,
+          `3. mcp__chrome-devtools__take_screenshot — verify the consent page loaded`,
+          `4. mcp__chrome-devtools__click element="Allow" — click the Allow button (may need to identify by aria label or text)`,
+          `5. mcp__chrome-devtools__wait_for text="can close" OR timeout 10s — wait for success`,
+          `6. mcp__chrome-devtools__close_page — clean up`,
+          `7. Retry exec — auth is now cached for this project`,
+        ].join('\n');
+      } else {
+        hints.invocation = jsStatement;
+      }
+
       return {
         success: false, filesSync,
         error: rawResult.error,
         logs: rawResult.logs,
-        hints: {
-          fix: isBrowserAuth
-            ? 'Open the deployment URL in a browser signed in as the script owner, then retry exec'
-            : isJsStatementMode
-              ? 'Check your JavaScript statement for syntax or runtime errors.'
-              : 'Check the function and module names, ensure function is exported inside _main().',
-          ...(isBrowserAuth
-            ? (!isJsStatementMode ? { exports: 'Function must be exported inside _main(): exports.myFn = function(){...} — bare function declarations are NOT callable via exec' } : {})
-            : { invocation: jsStatement }),
-        },
+        hints,
       };
     }
 
