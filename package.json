@@ -14,7 +14,8 @@
     "test": "node --import tsx node_modules/.bin/mocha 'test/**/*.test.ts' --ignore 'test/e2e/**' --timeout 30000",
     "test:unit": "node --import tsx node_modules/.bin/mocha 'test/unit/**/*.test.ts' --timeout 15000",
     "test:e2e": "node --import tsx node_modules/.bin/mocha 'test/e2e/e2e.test.ts' --timeout 120000",
-    "setup:exec-fixture": "node --import tsx test/e2e/setup-exec-fixture.ts"
+    "setup:exec-fixture": "node --import tsx test/e2e/setup-exec-fixture.ts",
+    "sync-runtime": "bash scripts/sync-runtime.sh"
   },
   "engines": {
     "node": ">=18"

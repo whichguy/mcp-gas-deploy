@@ -2,7 +2,8 @@
  * Unit tests for handleCreateTool
  *
  * Tests: missing title, successful create, API failure, partial failure recovery,
- * localDir already exists, localDir doesn't exist (creates it), path traversal guard.
+ * localDir already exists, localDir doesn't exist (creates it), path traversal guard,
+ * runtime files, manifest construction, push integration.
  */
 
 import { describe, it, beforeEach, afterEach } from 'mocha';
@@ -11,9 +12,10 @@ import sinon from 'sinon';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { handleCreateTool } from '../../src/tools/createTool.js';
+import { handleCreateTool, RUNTIME_DIR, RUNTIME_FILES, type PushFn } from '../../src/tools/createTool.js';
 import type { GASProjectOperations } from '../../src/api/gasProjectOperations.js';
 import type { GASFileOperations } from '../../src/api/gasFileOperations.js';
+import type { PushResult } from '../../src/sync/rsync.js';
 
 const VALID_SCRIPT_ID = 'abcdefghij1234567890';
 
@@ -33,13 +35,47 @@ function makeFileOps(): GASFileOperations {
   } as unknown as GASFileOperations;
 }
 
+/**
+ * Ensure runtime files exist in the real RUNTIME_DIR.
+ * They should already be present from npm run sync-runtime,
+ * but create stubs if missing (e.g. CI).
+ */
+async function ensureStubRuntimeFiles(): Promise<void> {
+  await fs.mkdir(RUNTIME_DIR, { recursive: true });
+  for (const file of RUNTIME_FILES) {
+    const filePath = path.join(RUNTIME_DIR, file.src);
+    try {
+      await fs.access(filePath);
+    } catch {
+      await fs.writeFile(filePath, `// stub: ${file.src}\n`, 'utf-8');
+    }
+  }
+}
+
+const DEFAULT_PUSH_RESULT: PushResult = {
+  success: true,
+  filesPushed: [
+    'require', 'common-js/ConfigManager', 'common-js/__mcp_exec',
+    'common-js/html_utils', 'common-js/__mcp_exec_success',
+    'common-js/__mcp_exec_error', 'appsscript',
+  ],
+};
+
+function makePushFn(result: PushResult = DEFAULT_PUSH_RESULT): PushFn & sinon.SinonStub {
+  return sinon.stub().resolves(result) as PushFn & sinon.SinonStub;
+}
+
 describe('handleCreateTool', () => {
   let tmpDir: string;
+  let pushFn: PushFn & sinon.SinonStub;
 
   beforeEach(async () => {
     const base = path.join(os.homedir(), '.cache', 'mcp-gas-deploy-test');
     await fs.mkdir(base, { recursive: true });
     tmpDir = await fs.mkdtemp(path.join(base, 'create-'));
+
+    await ensureStubRuntimeFiles();
+    pushFn = makePushFn();
   });
 
   afterEach(async () => {
@@ -54,6 +90,7 @@ describe('handleCreateTool', () => {
       { title: '' },
       makeProjectOps(),
       makeFileOps(),
+      pushFn,
     );
     assert.equal(result.success, false);
     assert.ok(result.error?.includes('title is required'), `got: ${result.error}`);
@@ -64,6 +101,7 @@ describe('handleCreateTool', () => {
       { title: '   ' },
       makeProjectOps(),
       makeFileOps(),
+      pushFn,
     );
     assert.equal(result.success, false);
     assert.ok(result.error?.includes('title is required'), `got: ${result.error}`);
@@ -76,6 +114,7 @@ describe('handleCreateTool', () => {
       { title: 'Test', localDir: '/etc/config' },
       makeProjectOps(),
       makeFileOps(),
+      pushFn,
     );
     assert.equal(result.success, false);
     assert.ok(result.error?.includes('home directory'), `got: ${result.error}`);
@@ -83,45 +122,159 @@ describe('handleCreateTool', () => {
 
   // --- Successful create ---
 
-  it('successful create returns scriptId, title, localDir, and files', async () => {
+  it('successful create returns scriptId, title, localDir, runtimeIncluded, and filesPushed', async () => {
     const result = await handleCreateTool(
       { title: 'My Project', localDir: tmpDir },
       makeProjectOps(),
       makeFileOps(),
+      pushFn,
     );
 
     assert.equal(result.success, true, `expected success, got: ${result.error}`);
     assert.equal(result.scriptId, VALID_SCRIPT_ID);
     assert.equal(result.title, 'Test Project');
     assert.equal(result.localDir, tmpDir);
+    assert.equal(result.runtimeIncluded, true);
+    assert.ok(Array.isArray(result.filesPushed), 'filesPushed should be an array');
+    assert.ok(result.filesPushed!.length > 0, 'filesPushed should not be empty');
+  });
 
-    // appsscript.json should be written
+  // --- Manifest construction ---
+
+  it('builds manifest with webapp and scopes defaults', async () => {
+    await handleCreateTool(
+      { title: 'My Project', localDir: tmpDir },
+      makeProjectOps(),
+      makeFileOps(),
+      pushFn,
+    );
+
     const manifestContent = await fs.readFile(path.join(tmpDir, 'appsscript.json'), 'utf-8');
     const manifest = JSON.parse(manifestContent);
     assert.equal(manifest.runtimeVersion, 'V8');
     assert.equal(manifest.timeZone, 'America/New_York');
-
-    // .clasp.json should be written
-    const claspContent = await fs.readFile(path.join(tmpDir, '.clasp.json'), 'utf-8');
-    const clasp = JSON.parse(claspContent);
-    assert.equal(clasp.scriptId, VALID_SCRIPT_ID);
+    assert.equal(manifest.webapp.executeAs, 'USER_DEPLOYING');
+    assert.equal(manifest.webapp.access, 'MYSELF');
+    assert.ok(manifest.oauthScopes.includes('https://www.googleapis.com/auth/script.scriptapp'));
+    assert.ok(manifest.oauthScopes.includes('https://www.googleapis.com/auth/script.external_request'));
   });
 
-  it('pushes appsscript.json to remote', async () => {
-    const fileOps = makeFileOps();
+  it('merges custom oauthScopes (deduped)', async () => {
+    const customScope = 'https://www.googleapis.com/auth/spreadsheets';
+    const duplicateScope = 'https://www.googleapis.com/auth/script.scriptapp';
+    await handleCreateTool(
+      { title: 'My Project', localDir: tmpDir, oauthScopes: [customScope, duplicateScope] },
+      makeProjectOps(),
+      makeFileOps(),
+      pushFn,
+    );
+
+    const manifestContent = await fs.readFile(path.join(tmpDir, 'appsscript.json'), 'utf-8');
+    const manifest = JSON.parse(manifestContent);
+    assert.ok(manifest.oauthScopes.includes(customScope), 'custom scope should be included');
+    const scriptappCount = manifest.oauthScopes.filter(
+      (s: string) => s === duplicateScope
+    ).length;
+    assert.equal(scriptappCount, 1, 'duplicate scope should not be added twice');
+  });
+
+  it('applies custom webapp overrides', async () => {
+    await handleCreateTool(
+      { title: 'My Project', localDir: tmpDir, webapp: { executeAs: 'USER_ACCESSING', access: 'ANYONE' } },
+      makeProjectOps(),
+      makeFileOps(),
+      pushFn,
+    );
+
+    const manifestContent = await fs.readFile(path.join(tmpDir, 'appsscript.json'), 'utf-8');
+    const manifest = JSON.parse(manifestContent);
+    assert.equal(manifest.webapp.executeAs, 'USER_ACCESSING');
+    assert.equal(manifest.webapp.access, 'ANYONE');
+  });
+
+  // --- Runtime file placement ---
+
+  it('copies require.gs to root and runtime files to common-js/', async () => {
     await handleCreateTool(
       { title: 'My Project', localDir: tmpDir },
       makeProjectOps(),
-      fileOps,
+      makeFileOps(),
+      pushFn,
     );
 
-    const updateStub = fileOps.updateProjectFiles as sinon.SinonStub;
-    assert.equal(updateStub.callCount, 1, 'updateProjectFiles should be called once');
-    const [scriptIdArg, filesArg] = updateStub.firstCall.args;
+    // require.gs at root
+    const requireStat = await fs.stat(path.join(tmpDir, 'require.gs'));
+    assert.ok(requireStat.isFile(), 'require.gs should exist at root');
+
+    // common-js/ files
+    for (const file of RUNTIME_FILES) {
+      const filePath = path.join(tmpDir, file.dest);
+      const stat = await fs.stat(filePath);
+      assert.ok(stat.isFile(), `${file.dest} should exist`);
+    }
+  });
+
+  it('creates common-js/ directory automatically', async () => {
+    await handleCreateTool(
+      { title: 'My Project', localDir: tmpDir },
+      makeProjectOps(),
+      makeFileOps(),
+      pushFn,
+    );
+
+    const stat = await fs.stat(path.join(tmpDir, 'common-js'));
+    assert.ok(stat.isDirectory(), 'common-js/ should be created');
+  });
+
+  // --- Push integration ---
+
+  it('calls push with prune:true', async () => {
+    await handleCreateTool(
+      { title: 'My Project', localDir: tmpDir },
+      makeProjectOps(),
+      makeFileOps(),
+      pushFn,
+    );
+
+    assert.equal(pushFn.callCount, 1, 'push should be called once');
+    const [scriptIdArg, , , optionsArg] = pushFn.firstCall.args;
     assert.equal(scriptIdArg, VALID_SCRIPT_ID);
-    assert.equal(filesArg.length, 1);
-    assert.equal(filesArg[0].name, 'appsscript');
-    assert.equal(filesArg[0].type, 'JSON');
+    assert.equal(optionsArg.prune, true);
+  });
+
+  it('returns error when push fails', async () => {
+    const failingPush = makePushFn({
+      success: false,
+      filesPushed: [],
+      error: 'API error',
+    });
+
+    const result = await handleCreateTool(
+      { title: 'My Project', localDir: tmpDir },
+      makeProjectOps(),
+      makeFileOps(),
+      failingPush,
+    );
+
+    assert.equal(result.success, false);
+    assert.ok(result.error?.includes('push failed'), `got: ${result.error}`);
+    assert.equal(result.scriptId, VALID_SCRIPT_ID, 'scriptId should be in error response for recovery');
+    assert.ok(result.hints.recovery?.includes('pull'), `recovery hint should mention pull, got: ${result.hints.recovery}`);
+  });
+
+  // --- .clasp.json ---
+
+  it('writes .clasp.json with correct scriptId', async () => {
+    await handleCreateTool(
+      { title: 'My Project', localDir: tmpDir },
+      makeProjectOps(),
+      makeFileOps(),
+      pushFn,
+    );
+
+    const claspContent = await fs.readFile(path.join(tmpDir, '.clasp.json'), 'utf-8');
+    const clasp = JSON.parse(claspContent);
+    assert.equal(clasp.scriptId, VALID_SCRIPT_ID);
   });
 
   // --- API failure ---
@@ -135,6 +288,7 @@ describe('handleCreateTool', () => {
       { title: 'My Project', localDir: tmpDir },
       failingOps,
       makeFileOps(),
+      pushFn,
     );
 
     assert.equal(result.success, false);
@@ -144,16 +298,14 @@ describe('handleCreateTool', () => {
 
   // --- Partial failure recovery ---
 
-  it('partial failure (push fails) returns scriptId for recovery', async () => {
-    const failingFileOps = {
-      getProjectFiles: sinon.stub().resolves([]),
-      updateProjectFiles: sinon.stub().rejects(new Error('push failed')),
-    } as unknown as GASFileOperations;
+  it('partial failure (post-create error) returns scriptId for recovery', async () => {
+    const throwingPush = sinon.stub().rejects(new Error('network timeout')) as PushFn & sinon.SinonStub;
 
     const result = await handleCreateTool(
       { title: 'My Project', localDir: tmpDir },
       makeProjectOps(),
-      failingFileOps,
+      makeFileOps(),
+      throwingPush,
     );
 
     assert.equal(result.success, false);
@@ -168,6 +320,7 @@ describe('handleCreateTool', () => {
       { title: 'My Project', localDir: tmpDir },
       makeProjectOps(),
       makeFileOps(),
+      pushFn,
     );
     assert.equal(result.success, true, `expected success, got: ${result.error}`);
   });
@@ -179,11 +332,10 @@ describe('handleCreateTool', () => {
       { title: 'My Project', localDir: newDir },
       makeProjectOps(),
       makeFileOps(),
+      pushFn,
     );
 
     assert.equal(result.success, true, `expected success, got: ${result.error}`);
-
-    // Directory should have been created
     const stats = await fs.stat(newDir);
     assert.ok(stats.isDirectory(), 'localDir should be created');
   });
@@ -196,6 +348,7 @@ describe('handleCreateTool', () => {
       { title: 'My Project', localDir: tmpDir, parentId: 'folder123' },
       projectOps,
       makeFileOps(),
+      pushFn,
     );
 
     const createStub = projectOps.createProject as sinon.SinonStub;
@@ -206,15 +359,27 @@ describe('handleCreateTool', () => {
 
   // --- Hints ---
 
-  it('hints include next step and commonjs guidance', async () => {
+  it('hints include deploy next step and commonjs guidance', async () => {
     const result = await handleCreateTool(
       { title: 'My Project', localDir: tmpDir },
       makeProjectOps(),
       makeFileOps(),
+      pushFn,
     );
 
     assert.equal(result.success, true);
-    assert.ok(result.hints.next?.includes('push'), `next hint should mention push, got: ${result.hints.next}`);
+    assert.ok(result.hints.next?.includes('deploy'), `next hint should mention deploy, got: ${result.hints.next}`);
     assert.ok(result.hints.commonjs, 'commonjs hint should be present');
+  });
+
+  // --- Runtime verification ---
+
+  it('RUNTIME_DIR resolves to project root runtime/', () => {
+    assert.ok(RUNTIME_DIR.endsWith('/runtime') || RUNTIME_DIR.endsWith('\\runtime'),
+      `RUNTIME_DIR should end with /runtime, got: ${RUNTIME_DIR}`);
+  });
+
+  it('RUNTIME_FILES has exactly 6 entries', () => {
+    assert.equal(RUNTIME_FILES.length, 6);
   });
 });

@@ -47,6 +47,12 @@ export class GuidanceFragments {
     'To update .clasp.json with a new scriptId, use the create tool (which writes .clasp.json during bootstrap).',
   ].join('\n');
 
+  static readonly createWorkflow = [
+    'create bootstraps a complete project: manifest + runtime files (require, ConfigManager, __mcp_exec, html_utils, HTML templates) + push + git init.',
+    'Next steps: deploy (staging) → browser auth (one-time) → exec.',
+    'Runtime files are bundled with mcp-gas-deploy — no external config needed.',
+  ].join('\n');
+
   static readonly propertiesCopyWorkflow = [
     'Script properties are NOT copied automatically. To copy them:',
     '1. exec in SOURCE project: require("runner-api").getScriptProperties() — returns all key/value pairs.',
