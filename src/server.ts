@@ -25,6 +25,7 @@ import { handleProjectCopyTool, PROJECT_COPY_TOOL_DEFINITION } from './tools/pro
 import { handleLsTool, LS_TOOL_DEFINITION } from './tools/lsTool.js';
 import { handleTriggerTool, TRIGGER_TOOL_DEFINITION } from './tools/triggerTool.js';
 import { handleCreateTool, CREATE_TOOL_DEFINITION } from './tools/createTool.js';
+import { handleForkTool, FORK_TOOL_DEFINITION } from './tools/forkTool.js';
 import { GASDeployOperations } from './api/gasDeployOperations.js';
 import { GASProjectOperations } from './api/gasProjectOperations.js';
 
@@ -57,6 +58,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       PROJECTS_TOOL_DEFINITION,
       PROJECT_COPY_TOOL_DEFINITION,
       TRIGGER_TOOL_DEFINITION,
+      FORK_TOOL_DEFINITION,
     ],
   };
 });
@@ -139,6 +141,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           args as unknown as Parameters<typeof handleTriggerTool>[0],
           sessionManager,
           deployOps,
+        );
+        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+      }
+
+      case 'fork': {
+        const result = await handleForkTool(
+          args as unknown as Parameters<typeof handleForkTool>[0],
+          projectOps,
+          fileOps,
         );
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       }
