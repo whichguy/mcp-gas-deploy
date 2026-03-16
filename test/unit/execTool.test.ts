@@ -408,6 +408,28 @@ describe('handleExecTool', () => {
     );
   });
 
+  it('browser auth error includes browserAuth automation hint with chrome-devtools steps', async () => {
+    sinon.stub(globalThis, 'fetch').resolves(
+      makeFetchResponse({
+        status: 403,
+        text: '<!DOCTYPE html><html><body>Sign in</body></html>',
+      }),
+    );
+
+    const result = await handleExecTool(
+      { scriptId: VALID_SCRIPT_ID, function: 'myFn', localDir: tmpDir },
+      makeFileOps(), makeSession(), makeDeployOps(),
+    );
+
+    assert.equal(result.success, false);
+    assert.ok(result.hints.browserAuth, 'browserAuth hint should be present');
+    assert.ok(result.hints.browserAuth.includes('chrome-devtools'), 'should reference chrome-devtools');
+    assert.ok(result.hints.browserAuth.includes('navigate_page'), 'should include navigate step');
+    assert.ok(result.hints.browserAuth.includes('wait_for'), 'should include wait step');
+    assert.ok(result.hints.browserAuth.includes('close_page'), 'should include cleanup step');
+    assert.ok(result.hints.browserAuth.includes(HEAD_URL), 'should include the HEAD URL');
+  });
+
   it('HTML 200 response (new project browser auth) triggers authorization hint', async () => {
     sinon.stub(globalThis, 'fetch').resolves(
       makeFetchResponse({

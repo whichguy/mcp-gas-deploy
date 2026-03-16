@@ -6,7 +6,7 @@
  * runtime files, manifest construction, push integration.
  */
 
-import { describe, it, beforeEach, afterEach } from 'mocha';
+import { describe, it, beforeEach, afterEach, after } from 'mocha';
 import { strict as assert } from 'node:assert';
 import sinon from 'sinon';
 import { promises as fs } from 'node:fs';
@@ -192,6 +192,32 @@ describe('handleCreateTool', () => {
     assert.equal(manifest.webapp.access, 'ANYONE');
   });
 
+  it('applies partial webapp override (executeAs only, access defaults to MYSELF)', async () => {
+    await handleCreateTool(
+      { title: 'My Project', localDir: tmpDir, webapp: { executeAs: 'USER_ACCESSING' } },
+      makeProjectOps(),
+      makeFileOps(),
+      pushFn,
+    );
+
+    const manifest = JSON.parse(await fs.readFile(path.join(tmpDir, 'appsscript.json'), 'utf-8'));
+    assert.equal(manifest.webapp.executeAs, 'USER_ACCESSING');
+    assert.equal(manifest.webapp.access, 'MYSELF');
+  });
+
+  it('applies partial webapp override (access only, executeAs defaults to USER_DEPLOYING)', async () => {
+    await handleCreateTool(
+      { title: 'My Project', localDir: tmpDir, webapp: { access: 'ANYONE' } },
+      makeProjectOps(),
+      makeFileOps(),
+      pushFn,
+    );
+
+    const manifest = JSON.parse(await fs.readFile(path.join(tmpDir, 'appsscript.json'), 'utf-8'));
+    assert.equal(manifest.webapp.executeAs, 'USER_DEPLOYING');
+    assert.equal(manifest.webapp.access, 'ANYONE');
+  });
+
   // --- Runtime file placement ---
 
   it('copies require.gs to root and runtime files to common-js/', async () => {
@@ -228,17 +254,20 @@ describe('handleCreateTool', () => {
 
   // --- Push integration ---
 
-  it('calls push with prune:true', async () => {
+  it('calls push with correct scriptId, localDir, fileOps, and prune:true', async () => {
+    const fileOps = makeFileOps();
     await handleCreateTool(
       { title: 'My Project', localDir: tmpDir },
       makeProjectOps(),
-      makeFileOps(),
+      fileOps,
       pushFn,
     );
 
     assert.equal(pushFn.callCount, 1, 'push should be called once');
-    const [scriptIdArg, , , optionsArg] = pushFn.firstCall.args;
+    const [scriptIdArg, localDirArg, fileOpsArg, optionsArg] = pushFn.firstCall.args;
     assert.equal(scriptIdArg, VALID_SCRIPT_ID);
+    assert.equal(localDirArg, tmpDir);
+    assert.strictEqual(fileOpsArg, fileOps);
     assert.equal(optionsArg.prune, true);
   });
 
@@ -373,6 +402,40 @@ describe('handleCreateTool', () => {
   });
 
   // --- Runtime verification ---
+
+  // Safety net: restore runtime file if a test crash left it renamed
+  after(async () => {
+    const target = path.join(RUNTIME_DIR, RUNTIME_FILES[0].src);
+    const backup = target + '.bak';
+    try {
+      await fs.access(backup);
+      await fs.rename(backup, target);
+    } catch {
+      // No backup found — nothing to restore
+    }
+  });
+
+  it('returns error when a runtime file is missing', async () => {
+    const target = path.join(RUNTIME_DIR, RUNTIME_FILES[0].src);
+    const backup = target + '.bak';
+    await fs.rename(target, backup);
+    try {
+      const projectOps = makeProjectOps();
+      const result = await handleCreateTool(
+        { title: 'My Project', localDir: tmpDir },
+        projectOps,
+        makeFileOps(),
+        pushFn,
+      );
+      assert.equal(result.success, false);
+      assert.ok(result.error?.includes('Runtime file missing'), `got: ${result.error}`);
+      assert.ok(result.hints.fix?.includes('sync-runtime'), `got: ${result.hints.fix}`);
+      // createProject should NOT have been called (runtime check is pre-API)
+      assert.equal((projectOps.createProject as sinon.SinonStub).callCount, 0);
+    } finally {
+      await fs.rename(backup, target);
+    }
+  });
 
   it('RUNTIME_DIR resolves to project root runtime/', () => {
     assert.ok(RUNTIME_DIR.endsWith('/runtime') || RUNTIME_DIR.endsWith('\\runtime'),
