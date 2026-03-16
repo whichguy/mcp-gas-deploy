@@ -26,6 +26,7 @@ import { buildHintContext } from '../utils/hintContext.js';
 import { resolveProject } from '../utils/resolveProject.js';
 import { SchemaFragments } from '../utils/schemaFragments.js';
 import { GuidanceFragments } from '../utils/guidanceFragments.js';
+import { loadClaspIgnore } from '../sync/claspIgnore.js';
 
 /** Default web app manifest config — applied when deploying a project with no webapp section. */
 const DEFAULT_WEBAPP_CONFIG = {
@@ -139,6 +140,7 @@ export const DEPLOY_TOOL_DEFINITION = {
       promote: 'action=promote — always staging→prod. Re-points prod deployment to current staging version.',
       versionLimit: 'GAS allows max 200 versions per project. Use list-versions to check budget.',
       consumer: 'Consumer shim auto-updates when userSymbol + consumerScriptId are configured in gas-deploy.json. Consumer failures are non-fatal.',
+      claspIgnore: GuidanceFragments.claspIgnore,
       errorRecovery: GuidanceFragments.errorRecovery,
     },
   },
@@ -723,6 +725,12 @@ export async function handleDeployTool(
         const h = Math.round(prodAge / (60 * 60 * 1000));
         hints.stale = `prod is ${h}h behind staging (v${N}) — consider: action=promote`;
       }
+    }
+
+    // Surface .claspignore state — version snapshot reflects the filtered file set
+    const claspIgnore = await loadClaspIgnore(resolvedDir);
+    if (claspIgnore.active) {
+      hints.claspIgnore = '.claspignore active — version snapshot reflects filtered file set';
     }
 
     const response: DeployToolResult = {

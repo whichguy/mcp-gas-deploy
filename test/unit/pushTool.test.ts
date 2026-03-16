@@ -296,6 +296,64 @@ describe('handlePushTool action=preview', () => {
   });
 });
 
+describe('handlePushTool — .claspignore hints', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    const base = path.join(os.homedir(), '.cache', 'mcp-gas-deploy-test');
+    await fs.mkdir(base, { recursive: true });
+    tmpDir = await fs.mkdtemp(path.join(base, 'push-claspignore-'));
+  });
+
+  afterEach(async () => {
+    sinon.restore();
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('shows claspIgnore hint when .claspignore exists (push action)', async () => {
+    await fs.writeFile(path.join(tmpDir, 'main.gs'), VALID_GS_CONTENT, 'utf-8');
+    await fs.writeFile(path.join(tmpDir, '.claspignore'), '*.test.gs\n', 'utf-8');
+
+    const result = await handlePushTool(
+      { scriptId: VALID_SCRIPT_ID, localDir: tmpDir },
+      makeFileOps(),
+    );
+
+    assert.equal(result.success, true, `expected success, got: ${result.error}`);
+    assert.ok(result.hints.claspIgnore, 'hints.claspIgnore should be present');
+    assert.ok(result.hints.claspIgnore.includes('1 patterns'), `got: ${result.hints.claspIgnore}`);
+    assert.equal(result.claspIgnoreActive, true);
+  });
+
+  it('no claspIgnore hint when .claspignore is absent', async () => {
+    await fs.writeFile(path.join(tmpDir, 'main.gs'), VALID_GS_CONTENT, 'utf-8');
+
+    const result = await handlePushTool(
+      { scriptId: VALID_SCRIPT_ID, localDir: tmpDir },
+      makeFileOps(),
+    );
+
+    assert.equal(result.success, true);
+    assert.equal(result.hints.claspIgnore, undefined);
+    assert.equal(result.claspIgnoreActive, undefined);
+  });
+
+  it('shows claspIgnore hint on preview action', async () => {
+    await fs.writeFile(path.join(tmpDir, 'main.gs'), VALID_GS_CONTENT, 'utf-8');
+    await fs.writeFile(path.join(tmpDir, '.claspignore'), 'scratch.gs\ntest/**\n', 'utf-8');
+
+    const result = await handlePushTool(
+      { scriptId: VALID_SCRIPT_ID, localDir: tmpDir, action: 'preview' },
+      makeFileOps(),
+    );
+
+    assert.equal(result.success, true);
+    assert.ok(result.hints.claspIgnore, 'hints.claspIgnore should be present on preview');
+    assert.ok(result.hints.claspIgnore.includes('2 patterns'));
+    assert.equal(result.claspIgnoreActive, true);
+  });
+});
+
 describe('handlePushTool — .clasp.json resolution', () => {
   let tmpDir: string;
 

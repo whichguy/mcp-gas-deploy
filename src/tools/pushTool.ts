@@ -18,6 +18,7 @@ import { resolveProject } from '../utils/resolveProject.js';
 import type { ResolvedFrom } from '../utils/resolveProject.js';
 import { SchemaFragments } from '../utils/schemaFragments.js';
 import { GuidanceFragments } from '../utils/guidanceFragments.js';
+import { loadClaspIgnore } from '../sync/claspIgnore.js';
 
 export interface PushToolParams {
   scriptId?: string;
@@ -43,6 +44,7 @@ export interface PushToolResult {
   error?: string;
   hints: Record<string, string>;
   preview?: PushPreviewResult & { prune: boolean };
+  claspIgnoreActive?: boolean;
 }
 
 export const PUSH_TOOL_DEFINITION = {
@@ -84,6 +86,7 @@ export const PUSH_TOOL_DEFINITION = {
       skipValidation: 'ONLY for system shim files (require.gs, __mcp_exec.gs). Never for user modules — validation catches real bugs.',
       prune: 'Default false (safe). Set true to remove remote-only files. Git archive preserves deleted files for recovery.',
       triggers: GuidanceFragments.triggerSetup,
+      claspIgnore: GuidanceFragments.claspIgnore,
       errorRecovery: GuidanceFragments.errorRecovery,
     },
   },
@@ -96,6 +99,7 @@ export const PUSH_TOOL_DEFINITION = {
       preview: { type: 'object' },
       error: { type: 'string' },
       hints: { type: 'object', additionalProperties: { type: 'string' } },
+      claspIgnoreActive: { type: 'boolean' },
     },
     required: ['success', 'filesPushed'],
   },
@@ -135,11 +139,17 @@ async function handlePreviewAction(
     hints.scriptId = `Using scriptId ${scriptId} from .clasp.json`;
   }
 
+  const claspIgnore = await loadClaspIgnore(resolvedDir);
+  if (claspIgnore.active) {
+    hints.claspIgnore = `.claspignore active (${claspIgnore.patternCount} patterns) — some local files excluded`;
+  }
+
   return {
     success: true,
     filesPushed: [],
     preview: { toAdd, toUpdate, toPreserve, toPrune, totalFilesAfterPush, prune: prune ?? false },
     hints,
+    claspIgnoreActive: claspIgnore.active || undefined,
   };
 }
 
@@ -222,9 +232,16 @@ export async function handlePushTool(
   if (result.gitArchived && result.archivedFiles?.length) {
     hints.gitArchive = `${result.archivedFiles.length} remote-only file(s) archived in git. Use \`git log --diff-filter=A -- <filename>\` to find archived files.`;
   }
+
+  const claspIgnore = await loadClaspIgnore(resolvedDir);
+  if (claspIgnore.active) {
+    hints.claspIgnore = `.claspignore active (${claspIgnore.patternCount} patterns) — some local files excluded`;
+  }
+
   return {
     success: true,
     filesPushed: result.filesPushed,
     hints,
+    claspIgnoreActive: claspIgnore.active || undefined,
   };
 }

@@ -17,6 +17,7 @@ import { promisify } from 'node:util';
 import { GASFileOperations } from '../api/gasFileOperations.js';
 import { validateFilesErrors, type ValidationResult } from '../validation/commonjsValidator.js';
 import type { GASFile } from '../api/gasTypes.js';
+import { loadClaspIgnore } from './claspIgnore.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -212,8 +213,15 @@ export function orderFilesForPush(fileSet: GASFile[], remoteFiles: GASFile[]): G
 /** Read all local .gs/.html/.json files in a directory (recursive). */
 async function readLocalFiles(
   localDir: string,
-  prefix: string = ''
+  prefix: string = '',
+  ignoreFilter?: (relativePath: string) => boolean
 ): Promise<Map<string, { source: string; type: GASFile['type']; filename: string }>> {
+  // Root call: load .claspignore if no filter provided
+  if (!ignoreFilter && prefix === '') {
+    const claspIgnore = await loadClaspIgnore(localDir);
+    ignoreFilter = claspIgnore.accepts;
+  }
+
   const entries = await fs.readdir(localDir, { withFileTypes: true });
   const files = new Map<string, { source: string; type: GASFile['type']; filename: string }>();
 
@@ -221,8 +229,9 @@ async function readLocalFiles(
     if (entry.isDirectory()) {
       // Skip hidden directories (e.g., .git)
       if (entry.name.startsWith('.')) continue;
-      const subPrefix = prefix ? `${prefix}/${entry.name}` : entry.name;
-      const subFiles = await readLocalFiles(path.join(localDir, entry.name), subPrefix);
+      const dirRelativePath = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (!ignoreFilter!(dirRelativePath)) continue;
+      const subFiles = await readLocalFiles(path.join(localDir, entry.name), dirRelativePath, ignoreFilter);
       for (const [name, file] of subFiles) {
         files.set(name, file);
       }
@@ -238,6 +247,9 @@ async function readLocalFiles(
     if (!prefix) {
       if (entryName === 'gas-deploy.json') continue;
     }
+
+    const relativePath = prefix ? `${prefix}/${entryName}` : entryName;
+    if (!ignoreFilter!(relativePath)) continue;
 
     const source = await fs.readFile(path.join(localDir, entryName), 'utf-8');
     const baseName = stripExtension(entryName);
