@@ -17,7 +17,7 @@ import { GASProjectOperations } from '../api/gasProjectOperations.js';
 import { GASFileOperations } from '../api/gasFileOperations.js';
 import { push } from '../sync/rsync.js';
 import { resolveProject } from '../utils/resolveProject.js';
-import { setDeploymentInfo, readDeployConfig } from '../config/deployConfig.js';
+import { setDeploymentInfo, readDeployConfig, getDeploymentInfo } from '../config/deployConfig.js';
 import { switchGcpProject, type ChromeDevtools } from '../utils/gcpSwitch.js';
 import { SchemaFragments } from '../utils/schemaFragments.js';
 import { GuidanceFragments } from '../utils/guidanceFragments.js';
@@ -132,12 +132,23 @@ export async function handleForkTool(
     const claspContent = await fs.readFile(claspPath, 'utf-8');
     const clasp = JSON.parse(claspContent);
     if (clasp.branches?.[branch]) {
+      const existingForkId = clasp.branches[branch] as string;
+      // Check gas-deploy.json to determine the actual execMode of the existing fork
+      let existingExecMode: 'scripts-run' | 'web-app-fallback' = 'web-app-fallback';
+      try {
+        const existingInfo = await getDeploymentInfo(resolvedDir, existingForkId);
+        if ((existingInfo as Record<string, unknown>).gcpSwitched) {
+          existingExecMode = 'scripts-run';
+        }
+      } catch {
+        // No config — default to web-app-fallback (safe)
+      }
       return {
         success: true,
-        forkScriptId: clasp.branches[branch],
+        forkScriptId: existingForkId,
         sourceScriptId,
         branch,
-        execMode: 'scripts-run',
+        execMode: existingExecMode,
         localDir: resolvedDir,
         hints: { existing: `Fork already exists for branch "${branch}". Using existing fork.` },
       };

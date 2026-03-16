@@ -12,6 +12,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { handleForkTool } from '../../src/tools/forkTool.js';
+import { writeDeployConfig } from '../../src/config/deployConfig.js';
 import type { GASProjectOperations } from '../../src/api/gasProjectOperations.js';
 import type { GASFileOperations } from '../../src/api/gasFileOperations.js';
 import type { ChromeDevtools } from '../../src/utils/gcpSwitch.js';
@@ -156,6 +157,53 @@ describe('handleForkTool', () => {
     // createProject should NOT have been called
     assert.equal((projectOps.createProject as sinon.SinonStub).called, false);
     assert.ok(result.hints.existing?.includes('already exists'));
+  });
+
+  it('returns scripts-run execMode for existing fork when gcpSwitched is true in gas-deploy.json', async () => {
+    const existingForkId = 'existingForkScriptId12345';
+    await fs.writeFile(
+      path.join(tmpDir, '.clasp.json'),
+      JSON.stringify({
+        scriptId: VALID_SCRIPT_ID,
+        branches: { 'feat/existing': existingForkId },
+      }),
+      'utf-8'
+    );
+    // Write gas-deploy.json indicating this fork was GCP-switched
+    await writeDeployConfig(tmpDir, {
+      [existingForkId]: { gcpSwitched: true } as Record<string, unknown>,
+    } as Record<string, unknown>);
+
+    const result = await handleForkTool(
+      { localDir: tmpDir, branch: 'feat/existing' },
+      makeProjectOps(),
+      makeFileOps(),
+    );
+
+    assert.equal(result.success, true);
+    assert.equal(result.execMode, 'scripts-run', 'should return scripts-run for gcpSwitched fork');
+  });
+
+  it('returns web-app-fallback execMode for existing fork when not gcpSwitched', async () => {
+    const existingForkId = 'existingForkScriptId12345';
+    await fs.writeFile(
+      path.join(tmpDir, '.clasp.json'),
+      JSON.stringify({
+        scriptId: VALID_SCRIPT_ID,
+        branches: { 'feat/existing': existingForkId },
+      }),
+      'utf-8'
+    );
+    // No gas-deploy.json entry → defaults to web-app-fallback
+
+    const result = await handleForkTool(
+      { localDir: tmpDir, branch: 'feat/existing' },
+      makeProjectOps(),
+      makeFileOps(),
+    );
+
+    assert.equal(result.success, true);
+    assert.equal(result.execMode, 'web-app-fallback', 'should return web-app-fallback when no gcpSwitched flag');
   });
 
   it('writes branch mapping to .clasp.json on success', async () => {
