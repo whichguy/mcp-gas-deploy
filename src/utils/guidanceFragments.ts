@@ -50,7 +50,7 @@ export class GuidanceFragments {
   ].join('\n');
 
   static readonly createWorkflow = [
-    'create bootstraps a complete project: manifest + runtime files (require, ConfigManager, __mcp_exec, html_utils, HTML templates) + push + git init.',
+    'create bootstraps a complete project: manifest + runtime files (require, ConfigManager, __mcp_exec, html_utils) + push + git init.',
     'Next steps: exec directly via scripts.run (no deploy or browser auth needed). For stable web app URLs: deploy (staging) → promote (prod).',
     'Runtime files are bundled with mcp-gas-deploy — no external config needed.',
   ].join('\n');
