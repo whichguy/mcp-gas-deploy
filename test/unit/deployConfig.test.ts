@@ -15,6 +15,9 @@ import {
   writeDeployConfig,
   getDeploymentInfo,
   setDeploymentInfo,
+  getRootConfig,
+  setRootConfig,
+  ROOT_CONFIG_KEY,
 } from '../../src/config/deployConfig.js';
 
 describe('deployConfig', () => {
@@ -259,6 +262,53 @@ describe('deployConfig', () => {
       assert.ok(!infoA.prodUrl);
       assert.equal(infoB.prodUrl, 'https://b.example.com');
       assert.ok(!infoB.stagingUrl);
+    });
+  });
+
+  // --- getRootConfig ---
+
+  describe('getRootConfig', () => {
+    it('returns empty object when gas-deploy.json does not exist', async () => {
+      const root = await getRootConfig(tmpDir);
+      assert.deepEqual(root, {});
+    });
+
+    it('returns empty object when _config key is missing', async () => {
+      await writeDeployConfig(tmpDir, { scriptA: { stagingUrl: 'https://a.com' } });
+      const root = await getRootConfig(tmpDir);
+      assert.deepEqual(root, {});
+    });
+
+    it('reads gcpProjectNumber from _config', async () => {
+      const config = { [ROOT_CONFIG_KEY]: { gcpProjectNumber: '428972970708' }, scriptA: { stagingUrl: 'https://a.com' } };
+      await writeDeployConfig(tmpDir, config as Record<string, unknown>);
+      const root = await getRootConfig(tmpDir);
+      assert.equal(root.gcpProjectNumber, '428972970708');
+    });
+  });
+
+  // --- setRootConfig ---
+
+  describe('setRootConfig', () => {
+    it('creates gas-deploy.json with _config when file absent', async () => {
+      await setRootConfig(tmpDir, { gcpProjectNumber: '123456789' });
+      const raw = JSON.parse(await fs.readFile(path.join(tmpDir, 'gas-deploy.json'), 'utf-8'));
+      assert.equal(raw[ROOT_CONFIG_KEY].gcpProjectNumber, '123456789');
+    });
+
+    it('merges partial into existing _config', async () => {
+      await setRootConfig(tmpDir, { gcpProjectNumber: '111' });
+      await setRootConfig(tmpDir, { gcpProjectNumber: '222' });
+      const root = await getRootConfig(tmpDir);
+      assert.equal(root.gcpProjectNumber, '222');
+    });
+
+    it('preserves existing per-scriptId entries', async () => {
+      await setDeploymentInfo(tmpDir, 'scriptX', { stagingUrl: 'https://x.com' });
+      await setRootConfig(tmpDir, { gcpProjectNumber: '999' });
+      const config = await readDeployConfig(tmpDir);
+      assert.equal(config['scriptX']?.stagingUrl, 'https://x.com');
+      assert.equal((config as Record<string, unknown>)[ROOT_CONFIG_KEY]?.gcpProjectNumber, '999');
     });
   });
 });
