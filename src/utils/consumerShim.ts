@@ -35,14 +35,22 @@ export function generateShimCode(userSymbol: string): string {
   return `// Auto-generated consumer shim — do not edit manually
 // Delegates all calls to library: ${userSymbol}
 
-function onOpen(e) { return ${userSymbol}.onOpen(e); }
-function onInstall(e) { return ${userSymbol}.onOpen(e); }
-function onEdit(e) { return ${userSymbol}.onEdit(e); }
-function exec_api(options, moduleName, functionName) { return ${userSymbol}.exec_api.apply(null, arguments); }
-function showSidebar() { return ${userSymbol}.showSidebar(); }
-function initialize() { return ${userSymbol}.initialize(); }
-function menuAction1() { return ${userSymbol}.menuAction1(); }
-function menuAction2() { return ${userSymbol}.menuAction2(); }
+// Pass bound spreadsheet context to standalone library before every call
+function _setLibraryContext() {
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    if (ss) ${userSymbol}.setContext({ spreadsheetId: ss.getId() });
+  } catch(e) { /* standalone — no active spreadsheet */ }
+}
+
+function onOpen(e) { _setLibraryContext(); return ${userSymbol}.onOpen(e); }
+function onInstall(e) { _setLibraryContext(); return ${userSymbol}.onOpen(e); }
+function onEdit(e) { _setLibraryContext(); return ${userSymbol}.onEdit(e); }
+function exec_api(options, moduleName, functionName) { _setLibraryContext(); return ${userSymbol}.exec_api.apply(null, arguments); }
+function showSidebar() { _setLibraryContext(); return ${userSymbol}.showSidebar(); }
+function initialize() { _setLibraryContext(); return ${userSymbol}.initialize(); }
+function menuAction1() { _setLibraryContext(); return ${userSymbol}.menuAction1(); }
+function menuAction2() { _setLibraryContext(); return ${userSymbol}.menuAction2(); }
 `;
 }
 

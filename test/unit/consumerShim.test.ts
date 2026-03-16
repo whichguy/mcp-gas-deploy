@@ -32,14 +32,21 @@ describe('generateShimCode', () => {
     }
   });
 
-  it('includes userSymbol in every proxy stub', () => {
+  it('includes userSymbol in every proxy stub (excluding internal helpers)', () => {
     const userSymbol = 'SheetsChat';
     const code = generateShimCode(userSymbol);
-    const lines = code.split('\n').filter(l => l.includes('function '));
+    // Filter to proxy function lines (exclude _setLibraryContext definition)
+    const lines = code.split('\n').filter(l => l.includes('function ') && !l.startsWith('function _setLibraryContext'));
     assert.ok(lines.length > 0, 'expected at least one function line');
     for (const line of lines) {
       assert.ok(line.includes(userSymbol), `line missing userSymbol "${userSymbol}": ${line}`);
     }
+  });
+
+  it('includes _setLibraryContext helper that calls setContext', () => {
+    const code = generateShimCode('MyLib');
+    assert.ok(code.includes('_setLibraryContext'), 'missing _setLibraryContext helper');
+    assert.ok(code.includes('MyLib.setContext'), 'missing setContext call on library');
   });
 
   it('generates different code for different userSymbols', () => {
