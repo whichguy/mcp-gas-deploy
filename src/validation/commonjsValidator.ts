@@ -467,6 +467,7 @@ export function validateFiles(
     'require', 'require.gs',
     'appsscript', 'appsscript.json',
     '__mcp_exec', '__mcp_exec_error', '__mcp_exec_success',
+    'html_utils',  // raw module, no _main/__defineModule__
   ]);
 
   for (const file of files) {

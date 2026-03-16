@@ -428,6 +428,24 @@ __defineModule__(_main, false);`;
     });
   });
 
+  describe('SKIP_FILES — html_utils', () => {
+    it('skips html_utils (no path prefix)', () => {
+      const src = `module.exports = { escape: function(s) { return s; } };`;
+      const result = validate('html_utils.gs', src);
+      assert.ok(result.valid, `Expected html_utils.gs to be skipped, got: ${JSON.stringify(result.errors)}`);
+    });
+
+    it('skips common-js/html_utils (with path prefix)', () => {
+      const src = `module.exports = { escape: function(s) { return s; } };`;
+      const results = validateFiles(
+        [{ name: 'common-js/html_utils', source: src, position: 5 }],
+        { skipRequirePositionCheck: true }
+      );
+      const result = results.find(r => r.file === 'common-js/html_utils');
+      assert.ok(!result, 'common-js/html_utils should be skipped entirely (no result entry)');
+    });
+  });
+
   describe('Full valid module', () => {
     it('passes a complete utility module', () => {
       const src = `function _main() {
