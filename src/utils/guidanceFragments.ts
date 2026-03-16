@@ -71,8 +71,8 @@ export class GuidanceFragments {
 
   static readonly branchMapping = [
     '.clasp.json supports branch-based scriptId mapping: { scriptId, branches: { branchName: scriptId } }.',
-    'fork tool automatically writes branch mappings.',
-    'resolveProject reads branch mappings when branch detection is enabled.',
+    'fork tool writes branch mappings and reads them for idempotent fork detection.',
+    'Tools use the root scriptId from .clasp.json; branch resolution is handled by the fork tool only.',
   ].join('\n');
 
   static readonly scriptsRun = [
