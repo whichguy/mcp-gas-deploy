@@ -12,7 +12,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { handleForkTool } from '../../src/tools/forkTool.js';
-import { writeDeployConfig } from '../../src/config/deployConfig.js';
+import { writeDeployConfig, readDeployConfig, ROOT_CONFIG_KEY } from '../../src/config/deployConfig.js';
 import type { GASProjectOperations } from '../../src/api/gasProjectOperations.js';
 import type { GASFileOperations } from '../../src/api/gasFileOperations.js';
 import type { ChromeDevtools } from '../../src/utils/gcpSwitch.js';
@@ -286,6 +286,40 @@ describe('handleForkTool', () => {
     // Branch should be detected (whatever the current branch is)
     assert.ok(typeof result.branch === 'string');
     assert.ok(result.branch!.length > 0);
+  });
+
+  it('reads gcpProjectNumber from gas-deploy.json _config root key', async () => {
+    // Write _config with gcpProjectNumber
+    await writeDeployConfig(tmpDir, {
+      [ROOT_CONFIG_KEY]: { gcpProjectNumber: '428972970708' },
+    } as Record<string, unknown>);
+
+    const result = await handleForkTool(
+      { localDir: tmpDir, branch: 'test' },
+      makeProjectOps(),
+      makeFileOps(),
+      makeDevtools(true),
+    );
+
+    assert.equal(result.success, true);
+    assert.equal(result.execMode, 'scripts-run', 'should use scripts-run when gcpProjectNumber comes from _config');
+  });
+
+  it('persists gcpProjectNumber to _config after successful GCP switch', async () => {
+    const result = await handleForkTool(
+      { localDir: tmpDir, branch: 'test', gcpProjectNumber: '428972970708' },
+      makeProjectOps(),
+      makeFileOps(),
+      makeDevtools(true),
+    );
+
+    assert.equal(result.success, true);
+    assert.equal(result.execMode, 'scripts-run');
+
+    // Verify _config was written
+    const config = await readDeployConfig(tmpDir);
+    const rootConfig = (config as Record<string, unknown>)[ROOT_CONFIG_KEY] as Record<string, unknown>;
+    assert.equal(rootConfig?.gcpProjectNumber, '428972970708');
   });
 
   it('shows gcpProjectNumber hint when no GCP number provided', async () => {

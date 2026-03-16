@@ -1145,4 +1145,4 @@ function _main(
   };
 }
 
-__defineModule__(_main, true, { explicitName: 'common-js/__mcp_exec' });
+__defineModule__( _main,'common-js/__mcp_exec', {loadNow: true});

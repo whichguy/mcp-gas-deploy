@@ -54,6 +54,14 @@ export interface DeployConfig {
   [scriptId: string]: DeploymentInfo;
 }
 
+/** Reserved root key for project-wide config (cannot collide with scriptIds). */
+export const ROOT_CONFIG_KEY = '_config';
+
+/** Project-wide settings stored under `_config` in gas-deploy.json. */
+export interface RootConfig {
+  gcpProjectNumber?: string;
+}
+
 /** Threshold for staleness hints — 48 hours. Shared by deployTool and statusTool. */
 export const STALE_THRESHOLD_MS = 48 * 60 * 60 * 1000;
 
@@ -97,5 +105,21 @@ export async function setDeploymentInfo(
 ): Promise<void> {
   const config = await readDeployConfig(localDir);
   config[scriptId] = { ...config[scriptId], ...info };
+  await writeDeployConfig(localDir, config);
+}
+
+export async function getRootConfig(localDir: string): Promise<RootConfig> {
+  try {
+    const config = await readDeployConfig(localDir);
+    return (config as Record<string, unknown>)[ROOT_CONFIG_KEY] as RootConfig ?? {};
+  } catch {
+    return {};
+  }
+}
+
+export async function setRootConfig(localDir: string, partial: Partial<RootConfig>): Promise<void> {
+  const config = await readDeployConfig(localDir);
+  const existing = (config as Record<string, unknown>)[ROOT_CONFIG_KEY] as RootConfig ?? {};
+  (config as Record<string, unknown>)[ROOT_CONFIG_KEY] = { ...existing, ...partial };
   await writeDeployConfig(localDir, config);
 }

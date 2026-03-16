@@ -17,7 +17,7 @@ import { GASProjectOperations } from '../api/gasProjectOperations.js';
 import { GASFileOperations } from '../api/gasFileOperations.js';
 import { push } from '../sync/rsync.js';
 import { resolveProject } from '../utils/resolveProject.js';
-import { setDeploymentInfo, readDeployConfig, getDeploymentInfo } from '../config/deployConfig.js';
+import { setDeploymentInfo, getDeploymentInfo, getRootConfig, setRootConfig } from '../config/deployConfig.js';
 import { switchGcpProject, type ChromeDevtools } from '../utils/gcpSwitch.js';
 import { SchemaFragments } from '../utils/schemaFragments.js';
 import { GuidanceFragments } from '../utils/guidanceFragments.js';
@@ -161,9 +161,8 @@ export async function handleForkTool(
   let gcpProjectNumber = params.gcpProjectNumber;
   if (!gcpProjectNumber) {
     try {
-      const config = await readDeployConfig(resolvedDir);
-      const rootConfig = config as Record<string, unknown>;
-      gcpProjectNumber = rootConfig.gcpProjectNumber as string | undefined;
+      const rootConfig = await getRootConfig(resolvedDir);
+      gcpProjectNumber = rootConfig.gcpProjectNumber;
     } catch {
       // No config — continue without
     }
@@ -254,6 +253,10 @@ export async function handleForkTool(
     if (execMode === 'scripts-run') {
       // Store gcpSwitched flag for exec tool routing
       await setDeploymentInfo(resolvedDir, forkScriptId, { gcpSwitched: true } as Record<string, unknown>);
+      // Persist gcpProjectNumber in root config for future forks
+      if (gcpProjectNumber) {
+        await setRootConfig(resolvedDir, { gcpProjectNumber });
+      }
     }
   } catch {
     // Non-fatal

@@ -36,6 +36,7 @@ import { handleDeployTool } from '../../src/tools/deployTool.js';
 import { handleExecTool } from '../../src/tools/execTool.js';
 import { handleTriggerTool } from '../../src/tools/triggerTool.js';
 import { handleProjectCopyTool } from '../../src/tools/projectCopyTool.js';
+import { handleForkTool } from '../../src/tools/forkTool.js';
 
 // Setup chain mirrors src/server.ts wiring
 const sessionManager = new SessionManager();
@@ -58,6 +59,8 @@ describe('mcp-gas-deploy E2E', function () {
   let copyNewScriptId: string | undefined;    // T10 cleanup
   let copyDestScriptId: string | undefined;   // T11 cleanup
   let copyLocalDir: string | undefined;       // T10 exec needs localDir
+  let forkScriptId: string | undefined;      // T12 cleanup
+  let forkLocalDir: string | undefined;      // T12 cleanup
 
   before(async function () {
     // Skip entire suite if not authenticated
@@ -101,6 +104,8 @@ describe('mcp-gas-deploy E2E', function () {
     if (tmpDir) await fs.rm(tmpDir, { recursive: true, force: true }).catch(e => console.error('cleanup tmpDir:', e));
     if (pullDir) await fs.rm(pullDir, { recursive: true, force: true }).catch(e => console.error('cleanup pullDir:', e));
     if (copyLocalDir) await fs.rm(copyLocalDir, { recursive: true, force: true }).catch(e => console.error('cleanup copyLocalDir:', e));
+    if (forkScriptId) await projectOps.trashProject(forkScriptId).catch(e => console.error('cleanup fork:', e));
+    if (forkLocalDir) await fs.rm(forkLocalDir, { recursive: true, force: true }).catch(e => console.error('cleanup forkLocalDir:', e));
   });
 
   it('T1: ls: lists pushed files on remote', async function () {
@@ -331,5 +336,55 @@ describe('mcp-gas-deploy E2E', function () {
     assert.ok(ls.success, `ls on destination failed: ${ls.error}`);
     assert.strictEqual(ls.count, result.filesCopied, 'ls count must match filesCopied');
     assert.ok(ls.files?.some(f => f.name === 'hello'), 'Expected hello file in destination project');
+  });
+
+  it('T12: fork → ls → pull → deploy → exec hello.greet() on fork', async function () {
+    // Step 1: Fork the ephemeral project
+    const forkResult = await handleForkTool(
+      { scriptId, localDir: tmpDir, branch: 'e2e-fork-test' },
+      projectOps,
+      fileOps,
+    );
+    assert.ok(forkResult.success, `fork failed: ${forkResult.error}`);
+    assert.ok(forkResult.forkScriptId, 'Expected forkScriptId');
+    assert.strictEqual(forkResult.sourceScriptId, scriptId);
+    assert.strictEqual(forkResult.execMode, 'web-app-fallback');
+    forkScriptId = forkResult.forkScriptId!;
+
+    // Step 2: ls the fork — verify files arrived (fork pushes during creation)
+    const ls = await handleLsTool({ scriptId: forkScriptId }, fileOps);
+    assert.ok(ls.success, `ls on fork failed: ${ls.error}`);
+    assert.ok((ls.count ?? 0) > 0, 'Expected files on fork');
+    assert.ok(ls.files?.some(f => f.name === 'hello'), 'Expected hello on fork');
+
+    // Step 3: Pull fork to local dir (deploy + exec need localDir)
+    const cacheDir = path.join(os.homedir(), '.cache', 'mcp-gas-deploy-test');
+    forkLocalDir = await fs.mkdtemp(path.join(cacheDir, 'e2e-fork-'));
+    const pullResult = await handlePullTool(
+      { scriptId: forkScriptId, targetDir: forkLocalDir },
+      fileOps,
+    );
+    assert.ok(pullResult.success, `pull on fork failed: ${pullResult.error}`);
+
+    // Step 4: Deploy the fork (creates HEAD deployment for web-app exec)
+    const deployResult = await handleDeployTool(
+      { scriptId: forkScriptId, localDir: forkLocalDir },
+      fileOps, deployOps,
+    );
+    assert.ok(deployResult.success, `deploy on fork failed: ${deployResult.error}`);
+
+    // Step 5: Exec hello.greet() on the fork
+    const execResult = await handleExecTool(
+      { scriptId: forkScriptId, localDir: forkLocalDir, module: 'hello', function: 'greet' },
+      fileOps, sessionManager, deployOps,
+    );
+    if (!execResult.success && execResult.error?.includes('browser authorization')) {
+      return this.skip();
+    }
+    assert.ok(execResult.success, `exec on fork failed: ${execResult.error}`);
+    assert.ok(
+      String(execResult.result).includes('Hello'),
+      `Expected 'Hello', got: ${JSON.stringify(execResult.result)}`,
+    );
   });
 });
