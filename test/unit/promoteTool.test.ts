@@ -32,6 +32,40 @@ const MINIMAL_FILES: GASFile[] = [
   { name: 'myApp', type: 'SERVER_JS', source: 'function main() {}' },
 ];
 
+/**
+ * Stub fetch to simulate ConfigManager reads returning null (scripts.run 404).
+ * All getConfigValue calls will return null; gas-deploy.json is the fallback.
+ */
+function stubFetch404(): sinon.SinonStub {
+  return sinon.stub(globalThis, 'fetch' as never).resolves({
+    ok: false, status: 404, text: async () => '',
+  } as Response);
+}
+
+/**
+ * Stub fetch to simulate ConfigManager reads returning a specific value for one key,
+ * and null for all others. Used to test ConfigManager-first read behaviour.
+ *
+ * The scripts.run success shape: { done: true, response: { result: { success: true, result: value } } }
+ */
+function stubFetchConfigManagerValue(key: string, value: string): sinon.SinonStub {
+  return sinon.stub(globalThis, 'fetch' as never).callsFake(async (_url: unknown, opts: unknown) => {
+    const body = JSON.parse((opts as { body: string }).body ?? '{}') as { parameters?: [{ func?: string }] };
+    const func = body.parameters?.[0]?.func ?? '';
+    if (func.includes(JSON.stringify(key))) {
+      return {
+        ok: true,
+        json: async () => ({
+          done: true,
+          response: { result: { success: true, result: value } },
+        }),
+      } as Response;
+    }
+    // All other keys → 404 (not found in ConfigManager)
+    return { ok: false, status: 404, text: async () => '' } as Response;
+  });
+}
+
 function makeFileOps(files: GASFile[] = MINIMAL_FILES): GASFileOperations {
   return {
     getProjectFiles: sinon.stub().resolves(files),
@@ -101,10 +135,8 @@ describe('handlePromoteTool', () => {
     });
     const sessionMgr = makeSessionManager();
 
-    // Stub fetch for property sync (non-fatal on failure)
-    sinon.stub(globalThis, 'fetch' as never).resolves({
-      ok: false, status: 404, text: async () => '',
-    } as Response);
+    // ConfigManager reads return null → fall back to gas-deploy.json (empty → create new)
+    stubFetch404();
 
     const result = await handlePromoteTool(
       { scriptId: DEV_SCRIPT_ID, localDir: tmpDir, to: 'staging', userSymbol: 'MyApp' },
@@ -144,9 +176,8 @@ describe('handlePromoteTool', () => {
     const projectOps = makeProjectOps();
     const sessionMgr = makeSessionManager();
 
-    sinon.stub(globalThis, 'fetch' as never).resolves({
-      ok: false, status: 404, text: async () => '',
-    } as Response);
+    // ConfigManager returns null → falls back to gas-deploy.json (IDs already present)
+    stubFetch404();
 
     const result = await handlePromoteTool(
       { scriptId: DEV_SCRIPT_ID, localDir: tmpDir, to: 'staging' },
@@ -155,6 +186,45 @@ describe('handlePromoteTool', () => {
 
     assert.equal(result.success, true);
     // createProject should NOT have been called (IDs already in config)
+    const createStub = projectOps.createProject as sinon.SinonStub;
+    assert.equal(createStub.callCount, 0);
+  });
+
+  it('promote to staging — ConfigManager-first: uses CM value when present', async () => {
+    // gas-deploy.json has all IDs including STAGING_SOURCE_ID; CM returns a different CM_SOURCE_ID.
+    // CM takes precedence → result.stagingSourceScriptId should be CM_SOURCE_ID.
+    await fs.writeFile(
+      path.join(tmpDir, 'gas-deploy.json'),
+      JSON.stringify({
+        [DEV_SCRIPT_ID]: {
+          libStagingSourceScriptId: STAGING_SOURCE_ID,
+          libStagingConsumerScriptId: STAGING_CONSUMER_ID,
+          libStagingSpreadsheetId: STAGING_SPREADSHEET_ID,
+          libUserSymbol: 'MyApp',
+        },
+      }),
+      'utf-8'
+    );
+
+    // CM returns a *different* source ID to verify CM takes precedence
+    const CM_SOURCE_ID = 'cmsourceid1234567890abcdefghijkl';
+    // But for the other IDs (consumer, spreadsheet) we need them too — only CM-source differs
+    // Simpler: just verify that if CM has a value, we don't createProject
+    stubFetchConfigManagerValue('STAGING_SOURCE_SCRIPT_ID', CM_SOURCE_ID);
+
+    const fileOps = makeFileOps();
+    const projectOps = makeProjectOps();
+    const sessionMgr = makeSessionManager();
+
+    const result = await handlePromoteTool(
+      { scriptId: DEV_SCRIPT_ID, localDir: tmpDir, to: 'staging', userSymbol: 'MyApp' },
+      fileOps, projectOps, sessionMgr
+    );
+
+    assert.equal(result.success, true);
+    // ConfigManager value takes precedence — source ID should be CM value, not gas-deploy.json
+    assert.equal(result.stagingSourceScriptId, CM_SOURCE_ID);
+    // createProject NOT called for source (CM had a value)
     const createStub = projectOps.createProject as sinon.SinonStub;
     assert.equal(createStub.callCount, 0);
   });
@@ -184,9 +254,7 @@ describe('handlePromoteTool', () => {
     });
     const sessionMgr = makeSessionManager();
 
-    sinon.stub(globalThis, 'fetch' as never).resolves({
-      ok: false, status: 404, text: async () => '',
-    } as Response);
+    stubFetch404();
 
     await handlePromoteTool(
       { scriptId: DEV_SCRIPT_ID, localDir: tmpDir, to: 'prod', userSymbol: 'MyApp' },
@@ -214,9 +282,7 @@ describe('handlePromoteTool', () => {
     });
     const sessionMgr = makeSessionManager();
 
-    sinon.stub(globalThis, 'fetch' as never).resolves({
-      ok: false, status: 404, text: async () => '',
-    } as Response);
+    stubFetch404();
 
     const OVERRIDE_SOURCE = 'overridesourceid1234567890abcdef';
     await handlePromoteTool(
@@ -243,6 +309,8 @@ describe('handlePromoteTool', () => {
     const projectOps = makeProjectOps();
     const sessionMgr = makeSessionManager();
 
+    stubFetch404();
+
     const result = await handlePromoteTool(
       { scriptId: DEV_SCRIPT_ID, localDir: tmpDir, to: 'prod' },
       fileOps, projectOps, sessionMgr
@@ -256,6 +324,9 @@ describe('handlePromoteTool', () => {
     const fileOps = makeFileOps();
     const projectOps = makeProjectOps();
     const sessionMgr = makeSessionManager();
+
+    // dryRun exits before any network calls, but getEnvironmentConfig still fires
+    stubFetch404();
 
     const result = await handlePromoteTool(
       { scriptId: DEV_SCRIPT_ID, localDir: tmpDir, to: 'staging', dryRun: true, userSymbol: 'MyApp' },
@@ -285,6 +356,9 @@ describe('handlePromoteTool', () => {
     const projectOps = makeProjectOps();
     const sessionMgr = makeSessionManager();
 
+    // ConfigManager reads return null → fall back to gas-deploy.json
+    stubFetch404();
+
     const result = await handlePromoteTool(
       { scriptId: DEV_SCRIPT_ID, localDir: tmpDir, operation: 'status' },
       fileOps, projectOps, sessionMgr
@@ -296,12 +370,16 @@ describe('handlePromoteTool', () => {
     assert.ok('staging' in result.status!);
     assert.ok('prod' in result.status!);
     assert.equal(result.status!.staging.sourceScriptId, STAGING_SOURCE_ID);
+    // Script URL should be populated
+    assert.ok((result.status!.staging.sourceScriptUrl as string | undefined)?.includes(STAGING_SOURCE_ID));
   });
 
   it('status — adds hint when no staging environment yet', async () => {
     const fileOps = makeFileOps();
     const projectOps = makeProjectOps();
     const sessionMgr = makeSessionManager();
+
+    stubFetch404();
 
     const result = await handlePromoteTool(
       { scriptId: DEV_SCRIPT_ID, localDir: tmpDir, operation: 'status' },
@@ -310,6 +388,104 @@ describe('handlePromoteTool', () => {
 
     assert.equal(result.success, true);
     assert.ok(result.hints.staging?.includes('promote'));
+  });
+
+  it('status — detects consumer manifest discrepancy', async () => {
+    await fs.writeFile(
+      path.join(tmpDir, 'gas-deploy.json'),
+      JSON.stringify({
+        [DEV_SCRIPT_ID]: {
+          libStagingSourceScriptId: STAGING_SOURCE_ID,
+          libStagingConsumerScriptId: STAGING_CONSUMER_ID,
+        },
+      }),
+      'utf-8'
+    );
+
+    // Consumer manifest points to the WRONG source library
+    const consumerFiles: GASFile[] = [
+      {
+        name: 'appsscript',
+        type: 'JSON',
+        source: JSON.stringify({
+          timeZone: 'UTC',
+          dependencies: {
+            libraries: [{ libraryId: 'wrongsourceid1234567890abcdefgh', userSymbol: 'App', developmentMode: true }],
+          },
+        }),
+      },
+    ];
+
+    const fileOps = makeFileOps();
+    const getFilesStub = fileOps.getProjectFiles as sinon.SinonStub;
+    // Return consumer files when asked for the consumer project
+    getFilesStub.callsFake(async (id: string) => {
+      if (id === STAGING_CONSUMER_ID) return consumerFiles;
+      return MINIMAL_FILES;
+    });
+
+    const projectOps = makeProjectOps();
+    const sessionMgr = makeSessionManager();
+
+    stubFetch404();
+
+    const result = await handlePromoteTool(
+      { scriptId: DEV_SCRIPT_ID, localDir: tmpDir, operation: 'status' },
+      fileOps, projectOps, sessionMgr
+    );
+
+    assert.equal(result.success, true);
+    assert.ok(result.hints.discrepancies?.includes('staging'));
+    // Discrepancies surfaced in staging status
+    assert.ok(Array.isArray(result.status!.staging.discrepancies));
+  });
+
+  it('status — no discrepancy when consumer manifest is correct', async () => {
+    await fs.writeFile(
+      path.join(tmpDir, 'gas-deploy.json'),
+      JSON.stringify({
+        [DEV_SCRIPT_ID]: {
+          libStagingSourceScriptId: STAGING_SOURCE_ID,
+          libStagingConsumerScriptId: STAGING_CONSUMER_ID,
+        },
+      }),
+      'utf-8'
+    );
+
+    // Consumer manifest points to the CORRECT source library with developmentMode: true
+    const consumerFiles: GASFile[] = [
+      {
+        name: 'appsscript',
+        type: 'JSON',
+        source: JSON.stringify({
+          timeZone: 'UTC',
+          dependencies: {
+            libraries: [{ libraryId: STAGING_SOURCE_ID, userSymbol: 'App', developmentMode: true }],
+          },
+        }),
+      },
+    ];
+
+    const fileOps = makeFileOps();
+    const getFilesStub = fileOps.getProjectFiles as sinon.SinonStub;
+    getFilesStub.callsFake(async (id: string) => {
+      if (id === STAGING_CONSUMER_ID) return consumerFiles;
+      return MINIMAL_FILES;
+    });
+
+    const projectOps = makeProjectOps();
+    const sessionMgr = makeSessionManager();
+
+    stubFetch404();
+
+    const result = await handlePromoteTool(
+      { scriptId: DEV_SCRIPT_ID, localDir: tmpDir, operation: 'status' },
+      fileOps, projectOps, sessionMgr
+    );
+
+    assert.equal(result.success, true);
+    assert.equal(result.hints.discrepancies, undefined);
+    assert.equal(result.status!.staging.discrepancies, undefined);
   });
 
   // ---------- setup operation ----------
@@ -326,6 +502,20 @@ describe('handlePromoteTool', () => {
 
     assert.equal(result.success, false);
     assert.ok(result.error?.includes('templateScriptId'));
+  });
+
+  it('setup — returns error when templateScriptId equals scriptId', async () => {
+    const fileOps = makeFileOps();
+    const projectOps = makeProjectOps();
+    const sessionMgr = makeSessionManager();
+
+    const result = await handlePromoteTool(
+      { scriptId: DEV_SCRIPT_ID, localDir: tmpDir, operation: 'setup', templateScriptId: DEV_SCRIPT_ID },
+      fileOps, projectOps, sessionMgr
+    );
+
+    assert.equal(result.success, false);
+    assert.ok(result.error?.includes('different project'));
   });
 
   it('setup — returns error when no staging-source library', async () => {
@@ -362,6 +552,9 @@ describe('handlePromoteTool', () => {
     const projectOps = makeProjectOps();
     const sessionMgr = makeSessionManager();
 
+    // setup calls resolveUserSymbol which may call getConfigValue (returns null → falls back to config)
+    stubFetch404();
+
     const result = await handlePromoteTool(
       { scriptId: DEV_SCRIPT_ID, localDir: tmpDir, operation: 'setup', templateScriptId: TEMPLATE_ID, userSymbol: 'MyApp' },
       fileOps, projectOps, sessionMgr
@@ -387,9 +580,7 @@ describe('handlePromoteTool', () => {
     });
     const sessionMgr = makeSessionManager();
 
-    sinon.stub(globalThis, 'fetch' as never).resolves({
-      ok: false, status: 404, text: async () => '',
-    } as Response);
+    stubFetch404();
 
     const result = await handlePromoteTool(
       { scriptId: DEV_SCRIPT_ID, localDir: tmpDir, to: 'staging' },
@@ -401,7 +592,7 @@ describe('handlePromoteTool', () => {
     // This is stored in hints or the promote result
     // Verify gas-deploy.json was written with a userSymbol
     const configPath = path.join(tmpDir, 'gas-deploy.json');
-    const config = JSON.parse(await fs.readFile(configPath, 'utf-8'));
-    assert.ok(config[DEV_SCRIPT_ID].libUserSymbol);
+    const config = JSON.parse(await fs.readFile(configPath, 'utf-8')) as Record<string, unknown>;
+    assert.ok((config[DEV_SCRIPT_ID] as Record<string, unknown>).libUserSymbol);
   });
 });
