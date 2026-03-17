@@ -191,7 +191,7 @@ export async function handlePromoteTool(
       case 'status':
         return handleStatus(scriptId, localDir, params, sessionManager);
       case 'setup':
-        return handleSetup(scriptId, localDir, params, fileOps, sessionManager);
+        return handleSetup(scriptId, localDir, params, fileOps, projectOps, sessionManager);
       default:
         return {
           success: false,
@@ -664,6 +664,7 @@ async function handleSetup(
   localDir: string,
   params: PromoteToolParams,
   fileOps: GASFileOperations,
+  projectOps: GASProjectOperations,
   _sessionManager: SessionManager,
 ): Promise<PromoteToolResult> {
   const templateScriptId = params.templateScriptId;
@@ -679,7 +680,7 @@ async function handleSetup(
   }
 
   const deployInfo = await getDeploymentInfo(localDir, scriptId);
-  const userSymbol = await resolveUserSymbol(scriptId, localDir, params, null);
+  const userSymbol = await resolveUserSymbol(scriptId, localDir, params, projectOps);
 
   // Need a source scriptId to wire against
   const sourceId = deployInfo.libStagingSourceScriptId;

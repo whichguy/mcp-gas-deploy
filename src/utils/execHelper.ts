@@ -66,7 +66,7 @@ export async function execInternal(
   }
 
   // On 404 (not GCP-switched), try web app fallback if headUrl provided
-  const is404 = scriptsRunResult.error?.includes('404') || scriptsRunResult.error?.includes('not found');
+  const is404 = scriptsRunResult.error?.includes('scripts.run 404:') === true;
   if (is404 && options?.headUrl) {
     const rawResult = await executeRawJs(
       jsStatement,

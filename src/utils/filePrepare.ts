@@ -45,7 +45,10 @@ export function enforceDeployFileOrder(files: GASFile[]): GASFile[] {
   const criticalFiles = DEPLOY_CRITICAL_ORDER.map(baseName => {
     // Match by exact name first, then by final path component (e.g. "require" matches "common-js/require")
     const exactFile = files.find(f => f.name === baseName);
-    const suffixFile = exactFile ?? files.find(f => f.name.endsWith(`/${baseName.split('/').pop()!}`));
+    const suffix = baseName.split('/').pop()!;
+    const suffixFile = exactFile ?? files.find(
+      f => f.name.startsWith('common-js/') && f.name.endsWith(`/${suffix}`)
+    );
     if (!suffixFile) {
       throw new Error(
         `[enforceDeployFileOrder] Required file "${baseName}" is missing from source project. ` +

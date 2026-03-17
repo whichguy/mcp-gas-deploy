@@ -236,6 +236,32 @@ describe('handleSetupTool', () => {
     assert.equal(result.gcpSwitched?.present, false);
   });
 
+  it('script — does NOT persist gcpSwitched when scriptsRunVerified is false', async () => {
+    // GCP switch succeeds but scripts.run verify fails (no real project) — gcpSwitched must NOT be written
+    const sessionMgr = makeSessionManager('test-token');
+    const fileOps = makeFileOps({ timeZone: 'UTC', executionApi: { access: 'MYSELF' } });
+    const devtools = makeDevtools(true); // GCP switch succeeds
+
+    await handleSetupTool(
+      { operation: 'script', scriptId: VALID_SCRIPT_ID, gcpProjectNumber: GCP_PROJECT_NUMBER, localDir: tmpDir },
+      fileOps,
+      sessionMgr,
+      devtools
+    );
+
+    const configPath = path.join(tmpDir, 'gas-deploy.json');
+    const exists = await fs.access(configPath).then(() => true).catch(() => false);
+    if (exists) {
+      const config = JSON.parse(await fs.readFile(configPath, 'utf-8'));
+      assert.equal(
+        config[VALID_SCRIPT_ID]?.gcpSwitched,
+        undefined,
+        'gcpSwitched must not be written when scriptsRunVerified is false'
+      );
+    }
+    // If gas-deploy.json was not written at all, gcpSwitched is also absent — test passes
+  });
+
   it('script — skips manifest push when executionApi already set', async () => {
     const sessionMgr = makeSessionManager('test-token');
     // Manifest already has executionApi.access = 'MYSELF'

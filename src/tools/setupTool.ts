@@ -452,7 +452,9 @@ async function handleSetupScript(
   // Persist setup state
   if (localDir) {
     try {
-      await setDeploymentInfo(localDir, scriptId, { gcpSwitched: true });
+      if (scriptsRunVerified) {
+        await setDeploymentInfo(localDir, scriptId, { gcpSwitched: true });
+      }
       await setRootConfig(localDir, { gcpProjectNumber });
     } catch {
       // Non-fatal
