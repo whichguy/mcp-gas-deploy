@@ -82,6 +82,24 @@ export class GuidanceFragments {
     'Supports spreadsheetId context passing for standalone projects accessing bound sheets.',
   ].join('\n');
 
+  static readonly setupTool = [
+    'setup has 3 operations: init (one-time GCP project setup), script (per-script scripts.run readiness), status (check state).',
+    'Auto-detects: scriptId present → script; no oauth-config.json → init; otherwise → status.',
+    'init: detects config state, best-effort enables Apps Script API, guides manual OAuth setup.',
+    'script: GCP-switch → ensure executionApi.access in manifest → verify with test call.',
+    'Requires chrome-devtools MCP for GCP switch (browser RPC). gcpProjectNumber from param or _config.',
+    'Idempotent: script returns early if gcpSwitched already true in gas-deploy.json.',
+  ].join('\n');
+
+  static readonly libraryPromote = [
+    'Library promote model: push files between -source libraries; consumers auto-update via HEAD.',
+    'Workflow: setup (optional) → promote to=staging → test → promote to=prod.',
+    'Auto-create: first promote auto-creates -source library + consumer spreadsheet.',
+    'Sheet sync: copies spreadsheet tabs via GAS SpreadsheetApp (preserves formulas/formatting).',
+    'Property sync: copies ConfigManager properties (excludes infrastructure keys).',
+    'Fix-forward: no rollback — edit dev, re-promote staging, re-promote prod.',
+  ].join('\n');
+
   static readonly propertiesCopyWorkflow = [
     'Script properties are NOT copied automatically. To copy them:',
     '1. exec in SOURCE project: require("runner-api").getScriptProperties() — returns all key/value pairs.',

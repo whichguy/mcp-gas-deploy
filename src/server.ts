@@ -26,6 +26,8 @@ import { handleLsTool, LS_TOOL_DEFINITION } from './tools/lsTool.js';
 import { handleTriggerTool, TRIGGER_TOOL_DEFINITION } from './tools/triggerTool.js';
 import { handleCreateTool, CREATE_TOOL_DEFINITION } from './tools/createTool.js';
 import { handleForkTool, FORK_TOOL_DEFINITION } from './tools/forkTool.js';
+import { handleSetupTool, SETUP_TOOL_DEFINITION } from './tools/setupTool.js';
+import { handlePromoteTool, PROMOTE_TOOL_DEFINITION } from './tools/promoteTool.js';
 import { GASDeployOperations } from './api/gasDeployOperations.js';
 import { GASProjectOperations } from './api/gasProjectOperations.js';
 
@@ -59,6 +61,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       PROJECT_COPY_TOOL_DEFINITION,
       TRIGGER_TOOL_DEFINITION,
       FORK_TOOL_DEFINITION,
+      SETUP_TOOL_DEFINITION,
+      PROMOTE_TOOL_DEFINITION,
     ],
   };
 });
@@ -150,6 +154,25 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           args as unknown as Parameters<typeof handleForkTool>[0],
           projectOps,
           fileOps,
+        );
+        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+      }
+
+      case 'setup': {
+        const result = await handleSetupTool(
+          args as unknown as Parameters<typeof handleSetupTool>[0],
+          fileOps,
+          sessionManager,
+        );
+        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+      }
+
+      case 'promote': {
+        const result = await handlePromoteTool(
+          args as unknown as Parameters<typeof handlePromoteTool>[0],
+          fileOps,
+          projectOps,
+          sessionManager,
         );
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       }
