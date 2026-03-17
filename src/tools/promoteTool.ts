@@ -398,7 +398,7 @@ async function promoteToStaging(
   const localInfo = await getDeploymentInfo(localDir, scriptId);
   const envConfig = await getEnvironmentConfig(scriptId, localDir, sessionManager, { headUrl: localInfo.headUrl });
 
-  const userSymbol = await resolveUserSymbol(scriptId, localDir, params, projectOps, sessionManager);
+  const userSymbol = await resolveUserSymbol(scriptId, localDir, params, projectOps, sessionManager, { headUrl: localInfo.headUrl });
 
   let stagingSourceScriptId = envConfig.staging.sourceScriptId;
   let stagingSpreadsheetId = envConfig.staging.spreadsheetId;
@@ -595,7 +595,7 @@ async function promoteToProd(
     };
   }
 
-  const userSymbol = await resolveUserSymbol(scriptId, localDir, params, projectOps, sessionManager);
+  const userSymbol = await resolveUserSymbol(scriptId, localDir, params, projectOps, sessionManager, { headUrl: localInfo.headUrl });
 
   let prodSourceScriptId = envConfig.prod.sourceScriptId;
   let prodSpreadsheetId = envConfig.prod.spreadsheetId;
@@ -907,11 +907,12 @@ async function handleSetup(
     };
   }
 
-  const deployInfo = await getDeploymentInfo(localDir, scriptId);
-  const userSymbol = await resolveUserSymbol(scriptId, localDir, params, projectOps, sessionManager);
+  const localInfo = await getDeploymentInfo(localDir, scriptId);
+  const envConfig = await getEnvironmentConfig(scriptId, localDir, sessionManager, { headUrl: localInfo.headUrl });
+  const userSymbol = await resolveUserSymbol(scriptId, localDir, params, projectOps, sessionManager, { headUrl: localInfo.headUrl });
 
-  // Need a source scriptId to wire against
-  const sourceId = deployInfo.libStagingSourceScriptId;
+  // Need a source scriptId to wire against (ConfigManager-first)
+  const sourceId = envConfig.staging.sourceScriptId;
   if (!sourceId) {
     return {
       success: false,
@@ -1029,6 +1030,7 @@ async function resolveUserSymbol(
   params: PromoteToolParams,
   projectOps: GASProjectOperations | null,
   sessionManager: SessionManager,
+  options?: { headUrl?: string },
 ): Promise<string> {
   if (params.userSymbol) {
     validateUserSymbol(params.userSymbol);
@@ -1037,7 +1039,7 @@ async function resolveUserSymbol(
 
   // Try ConfigManager first (authoritative cross-tool store)
   try {
-    const cmSymbol = await getConfigValue(scriptId, CONFIG_KEYS.userSymbol, sessionManager);
+    const cmSymbol = await getConfigValue(scriptId, CONFIG_KEYS.userSymbol, sessionManager, options);
     if (cmSymbol) {
       validateUserSymbol(cmSymbol);
       return cmSymbol;

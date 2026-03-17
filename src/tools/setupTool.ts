@@ -22,6 +22,7 @@ import { SchemaFragments } from '../utils/schemaFragments.js';
 import { GuidanceFragments } from '../utils/guidanceFragments.js';
 import type { GASFileOperations } from '../api/gasFileOperations.js';
 import type { SessionManager } from '../auth/sessionManager.js';
+import { getAuthHint } from '../utils/authHints.js';
 
 const GCP_PROJECT_NUMBER_RE = /^\d{6,20}$/;
 
@@ -184,7 +185,7 @@ async function handleSetupInit(
     ? { present: true, value: email }
     : {
         present: false,
-        hint: 'Run auth action="login" to authenticate.',
+        hint: await getAuthHint(sessionManager),
       };
 
   if (!token) {
@@ -356,14 +357,15 @@ async function handleSetupScript(
   }
 
   if (!token) {
+    const hint = await getAuthHint(sessionManager);
     return {
       success: false,
       operation: 'script',
       oauthConfig: { present: false },
-      token: { present: false, hint: 'Run auth action="login" to authenticate.' },
+      token: { present: false, hint },
       gcpProjectNumber: { present: true, value: gcpProjectNumber },
-      error: 'Not authenticated. Run auth action="login" first.',
-      hints: { auth: 'Run auth action="login" to authenticate.' },
+      error: hint,
+      hints: { auth: hint },
     };
   }
 
@@ -507,7 +509,7 @@ async function handleSetupStatus(
   }
   const tokenStatus: SetupRequirementStatus = token
     ? { present: true, value: email }
-    : { present: false, hint: 'Run auth action="login".' };
+    : { present: false, hint: await getAuthHint(sessionManager) };
 
   if (!token) hints.auth = tokenStatus.hint!;
 

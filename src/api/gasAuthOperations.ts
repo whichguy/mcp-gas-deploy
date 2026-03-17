@@ -8,6 +8,7 @@
 import { google } from 'googleapis';
 import { createHash } from 'node:crypto';
 import { SessionManager } from '../auth/sessionManager.js';
+import { getAuthHint } from '../utils/authHints.js';
 
 /**
  * Result of an authenticated API call
@@ -40,7 +41,8 @@ export class GASAuthOperations {
   async getAccessToken(): Promise<string> {
     const token = await this.sessionManager.getValidToken();
     if (!token) {
-      throw new Error('Not authenticated. Run the auth tool with action="login" first.');
+      const hint = await getAuthHint(this.sessionManager);
+      throw new Error(hint);
     }
     return token;
   }

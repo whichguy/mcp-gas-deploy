@@ -12,6 +12,7 @@
 import { executeViaScriptsRun } from './scriptsRunExecutor.js';
 import { executeRawJs } from './gasExecutor.js';
 import type { SessionManager } from '../auth/sessionManager.js';
+import { getAuthHint } from './authHints.js';
 
 export interface InternalExecResult {
   success: boolean;
@@ -40,14 +41,14 @@ export async function execInternal(
   } catch {
     return {
       success: false,
-      error: 'Not authenticated. Run auth action="login" first.',
+      error: await getAuthHint(sessionManager),
     };
   }
 
   if (!token) {
     return {
       success: false,
-      error: 'Not authenticated. Run auth action="login" first.',
+      error: await getAuthHint(sessionManager),
     };
   }
 
