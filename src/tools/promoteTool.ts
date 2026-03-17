@@ -17,21 +17,153 @@
  */
 
 import {
-  getDeploymentInfo, setDeploymentInfo, getRootConfig
+  getDeploymentInfo, setDeploymentInfo,
 } from '../config/deployConfig.js';
 import { resolveProject } from '../utils/resolveProject.js';
 import { prepareFilesForDeploy } from '../utils/filePrepare.js';
 import { generatePromoteHints, generatePromoteErrorHints } from '../utils/promoteHints.js';
 import { buildConsumerManifest, generateShimCode, validateUserSymbol } from '../utils/consumerShim.js';
-import { ensureExecutionApi } from '../utils/manifestUtils.js';
 import { syncSheets, type SheetSyncMode } from '../utils/sheetSync.js';
 import { syncProperties } from '../utils/propertySync.js';
 import { SchemaFragments } from '../utils/schemaFragments.js';
 import { GuidanceFragments } from '../utils/guidanceFragments.js';
+import { getConfigValue, setConfigValue } from '../utils/execHelper.js';
 import type { GASFileOperations } from '../api/gasFileOperations.js';
 import type { GASProjectOperations } from '../api/gasProjectOperations.js';
 import type { SessionManager } from '../auth/sessionManager.js';
 import type { DeploymentInfo } from '../config/deployConfig.js';
+
+// Key names must match mcp_gas exactly for cross-tool consistency.
+const CONFIG_KEYS = {
+  staging: {
+    sourceScriptId: 'STAGING_SOURCE_SCRIPT_ID',
+    scriptId:       'STAGING_SCRIPT_ID',
+    spreadsheetId:  'STAGING_SPREADSHEET_URL', // stores ID, not URL — matches mcp_gas
+    promotedAt:     'STAGING_PROMOTED_AT',
+  },
+  prod: {
+    sourceScriptId: 'PROD_SOURCE_SCRIPT_ID',
+    scriptId:       'PROD_SCRIPT_ID',
+    spreadsheetId:  'PROD_SPREADSHEET_URL',
+    promotedAt:     'PROD_PROMOTED_AT',
+  },
+  userSymbol:       'USER_SYMBOL',
+  templateScriptId: 'TEMPLATE_SCRIPT_ID',
+} as const;
+
+// Per-scriptId mutex — prevents concurrent promote races on the same project.
+// Co-located here (not a shared utility) because promote lock semantics may
+// diverge from push lock semantics (rsync.ts withPushLock) over time.
+const promoteLocks = new Map<string, Promise<void>>();
+
+/** Serialize promote operations per scriptId to prevent concurrent file-push races. */
+async function withPromoteLock<T>(scriptId: string, fn: () => Promise<T>): Promise<T> {
+  while (promoteLocks.has(scriptId)) { await promoteLocks.get(scriptId); }
+  let resolve: () => void = () => {};
+  const lock = new Promise<void>(r => { resolve = r; });
+  promoteLocks.set(scriptId, lock);
+  try { return await fn(); }
+  finally { promoteLocks.delete(scriptId); resolve(); }
+}
+
+/** Resolved environment IDs — ConfigManager is authoritative, gas-deploy.json is fallback cache. */
+interface EnvConfig {
+  staging: { sourceScriptId?: string; consumerScriptId?: string; spreadsheetId?: string };
+  prod:    { sourceScriptId?: string; consumerScriptId?: string; spreadsheetId?: string };
+  userSymbol?: string;
+  templateScriptId?: string;
+}
+
+/**
+ * Read all environment IDs from ConfigManager (primary) in parallel,
+ * falling back to gas-deploy.json lib* fields when ConfigManager is unavailable.
+ */
+async function getEnvironmentConfig(
+  scriptId: string,
+  localDir: string,
+  sessionManager: SessionManager,
+  options?: { headUrl?: string },
+): Promise<EnvConfig> {
+  const localInfo = await getDeploymentInfo(localDir, scriptId);
+
+  const [
+    stagingSourceScriptId,
+    stagingConsumerScriptId,
+    stagingSpreadsheetId,
+    prodSourceScriptId,
+    prodConsumerScriptId,
+    prodSpreadsheetId,
+    userSymbol,
+  ] = await Promise.all([
+    getConfigValue(scriptId, CONFIG_KEYS.staging.sourceScriptId, sessionManager, options),
+    getConfigValue(scriptId, CONFIG_KEYS.staging.scriptId, sessionManager, options),
+    getConfigValue(scriptId, CONFIG_KEYS.staging.spreadsheetId, sessionManager, options),
+    getConfigValue(scriptId, CONFIG_KEYS.prod.sourceScriptId, sessionManager, options),
+    getConfigValue(scriptId, CONFIG_KEYS.prod.scriptId, sessionManager, options),
+    getConfigValue(scriptId, CONFIG_KEYS.prod.spreadsheetId, sessionManager, options),
+    getConfigValue(scriptId, CONFIG_KEYS.userSymbol, sessionManager, options),
+  ]);
+
+  return {
+    staging: {
+      sourceScriptId:  stagingSourceScriptId  ?? localInfo.libStagingSourceScriptId,
+      consumerScriptId: stagingConsumerScriptId ?? localInfo.libStagingConsumerScriptId,
+      spreadsheetId:   stagingSpreadsheetId   ?? localInfo.libStagingSpreadsheetId,
+    },
+    prod: {
+      sourceScriptId:  prodSourceScriptId  ?? localInfo.libProdSourceScriptId,
+      consumerScriptId: prodConsumerScriptId ?? localInfo.libProdConsumerScriptId,
+      spreadsheetId:   prodSpreadsheetId   ?? localInfo.libProdSpreadsheetId,
+    },
+    userSymbol:       userSymbol ?? localInfo.libUserSymbol,
+    templateScriptId: localInfo.libTemplateScriptId,
+  };
+}
+
+/**
+ * Write a single env ID to both ConfigManager (non-fatal) and gas-deploy.json (always).
+ * Returns whether the ConfigManager write failed — callers may surface a hint.
+ */
+async function storeEnvId(
+  scriptId: string,
+  localDir: string,
+  configKey: string,
+  libField: keyof DeploymentInfo,
+  value: string,
+  sessionManager: SessionManager,
+  options?: { headUrl?: string },
+): Promise<{ configManagerFailed: boolean }> {
+  let configManagerFailed = false;
+  try {
+    await setConfigValue(scriptId, configKey, value, sessionManager, options);
+  } catch {
+    configManagerFailed = true;
+  }
+  await setDeploymentInfo(localDir, scriptId, { [libField]: value } as Partial<DeploymentInfo>);
+  return { configManagerFailed };
+}
+
+/**
+ * Write a PROMOTED_AT timestamp to ConfigManager (non-fatal) and gas-deploy.json.
+ * Explicitly awaited at call sites — gas-deploy.json write completes before returning.
+ */
+async function storePromoteTimestamp(
+  scriptId: string,
+  localDir: string,
+  env: 'staging' | 'prod',
+  timestamp: string,
+  sessionManager: SessionManager,
+  options?: { headUrl?: string },
+): Promise<void> {
+  const configKey = env === 'staging' ? CONFIG_KEYS.staging.promotedAt : CONFIG_KEYS.prod.promotedAt;
+  const libField: keyof DeploymentInfo = env === 'staging' ? 'libStagingPromotedAt' : 'libProdPromotedAt';
+  try {
+    await setConfigValue(scriptId, configKey, timestamp, sessionManager, options);
+  } catch {
+    // Non-fatal — gas-deploy.json write below is the authoritative local record
+  }
+  await setDeploymentInfo(localDir, scriptId, { [libField]: timestamp } as Partial<DeploymentInfo>);
+}
 
 export interface PromoteToolParams {
   scriptId?: string;
@@ -189,7 +321,7 @@ export async function handlePromoteTool(
       case 'promote':
         return handlePromote(scriptId, localDir, params, fileOps, projectOps, sessionManager);
       case 'status':
-        return handleStatus(scriptId, localDir, params, sessionManager);
+        return handleStatus(scriptId, localDir, params, fileOps, sessionManager);
       case 'setup':
         return handleSetup(scriptId, localDir, params, fileOps, projectOps, sessionManager);
       default:
@@ -239,23 +371,21 @@ async function handlePromote(
     };
   }
 
-  const deployInfo = await getDeploymentInfo(localDir, scriptId);
   const syncSheetsMode = params.syncSheets ?? 'replace_all';
   const shouldSyncProperties = params.syncProperties !== false;
   const dryRun = params.dryRun ?? false;
 
-  if (params.to === 'staging') {
-    return promoteToStaging(scriptId, localDir, params, deployInfo, fileOps, projectOps, sessionManager, syncSheetsMode, shouldSyncProperties, dryRun);
-  } else {
-    return promoteToProd(scriptId, localDir, params, deployInfo, fileOps, projectOps, sessionManager, syncSheetsMode, shouldSyncProperties, dryRun);
-  }
+  return withPromoteLock(scriptId, () =>
+    params.to === 'staging'
+      ? promoteToStaging(scriptId, localDir, params, fileOps, projectOps, sessionManager, syncSheetsMode, shouldSyncProperties, dryRun)
+      : promoteToProd(scriptId, localDir, params, fileOps, projectOps, sessionManager, syncSheetsMode, shouldSyncProperties, dryRun)
+  );
 }
 
 async function promoteToStaging(
   scriptId: string,
   localDir: string,
   params: PromoteToolParams,
-  deployInfo: DeploymentInfo,
   fileOps: GASFileOperations,
   projectOps: GASProjectOperations,
   sessionManager: SessionManager,
@@ -264,42 +394,47 @@ async function promoteToStaging(
   dryRun: boolean,
 ): Promise<PromoteToolResult> {
   const hints: Record<string, string> = {};
-  let info = { ...deployInfo };
 
-  // Auto-create environment if missing (idempotent — checks each ID before creating)
-  const userSymbol = await resolveUserSymbol(scriptId, localDir, params, projectOps);
+  const localInfo = await getDeploymentInfo(localDir, scriptId);
+  const envConfig = await getEnvironmentConfig(scriptId, localDir, sessionManager, { headUrl: localInfo.headUrl });
+
+  const userSymbol = await resolveUserSymbol(scriptId, localDir, params, projectOps, sessionManager);
+
+  let stagingSourceScriptId = envConfig.staging.sourceScriptId;
+  let stagingSpreadsheetId = envConfig.staging.spreadsheetId;
+  let stagingConsumerScriptId = envConfig.staging.consumerScriptId;
 
   // Create staging-source library if needed
-  if (!info.libStagingSourceScriptId) {
+  if (!stagingSourceScriptId) {
     if (dryRun) {
       hints.dryRun = 'Would create staging-source library.';
     } else {
       const title = `${userSymbol}-staging-source`;
       const created = await projectOps.createProject(title);
-      info.libStagingSourceScriptId = created.scriptId;
-      await setDeploymentInfo(localDir, scriptId, { libStagingSourceScriptId: created.scriptId });
+      stagingSourceScriptId = created.scriptId;
+      await storeEnvId(scriptId, localDir, CONFIG_KEYS.staging.sourceScriptId, 'libStagingSourceScriptId', stagingSourceScriptId, sessionManager, { headUrl: localInfo.headUrl });
     }
   }
 
   // Create staging spreadsheet if needed
-  if (!info.libStagingSpreadsheetId) {
+  if (!stagingSpreadsheetId) {
     if (dryRun) {
       hints.dryRun = (hints.dryRun ?? '') + ' Would create staging consumer spreadsheet.';
     } else {
       const spreadsheetId = await projectOps.createSpreadsheet(`${userSymbol} Staging`);
-      info.libStagingSpreadsheetId = spreadsheetId;
-      await setDeploymentInfo(localDir, scriptId, { libStagingSpreadsheetId: spreadsheetId });
+      stagingSpreadsheetId = spreadsheetId;
+      await storeEnvId(scriptId, localDir, CONFIG_KEYS.staging.spreadsheetId, 'libStagingSpreadsheetId', stagingSpreadsheetId, sessionManager, { headUrl: localInfo.headUrl });
     }
   }
 
   // Create staging consumer project (container-bound) if needed
-  if (!info.libStagingConsumerScriptId && !dryRun) {
+  if (!stagingConsumerScriptId && !dryRun) {
     const consumer = await projectOps.createProject(
       `${userSymbol}-staging-consumer`,
-      info.libStagingSpreadsheetId
+      stagingSpreadsheetId,
     );
-    info.libStagingConsumerScriptId = consumer.scriptId;
-    await setDeploymentInfo(localDir, scriptId, { libStagingConsumerScriptId: consumer.scriptId });
+    stagingConsumerScriptId = consumer.scriptId;
+    await storeEnvId(scriptId, localDir, CONFIG_KEYS.staging.scriptId, 'libStagingConsumerScriptId', stagingConsumerScriptId, sessionManager, { headUrl: localInfo.headUrl });
   }
 
   if (dryRun) {
@@ -310,24 +445,34 @@ async function promoteToStaging(
       localDir,
       to: 'staging',
       dryRun: true,
-      stagingSourceScriptId: info.libStagingSourceScriptId,
-      stagingConsumerScriptId: info.libStagingConsumerScriptId,
-      stagingSpreadsheetId: info.libStagingSpreadsheetId,
+      stagingSourceScriptId,
+      stagingConsumerScriptId,
+      stagingSpreadsheetId,
       hints: { dryRun: 'Dry run complete. No changes made.' },
     };
   }
-
-  const stagingSourceScriptId = info.libStagingSourceScriptId!;
 
   // Read dev files and prepare for deploy
   const devFiles = await fileOps.getProjectFiles(scriptId);
   const prepared = prepareFilesForDeploy(devFiles);
 
+  // Extract oauthScopes/timeZone from dev manifest for accurate shim repair
+  const devManifest = devFiles.find(f => f.name === 'appsscript');
+  let oauthScopes: string[] | undefined;
+  let timeZone: string | undefined;
+  try {
+    if (devManifest?.source) {
+      const m = JSON.parse(devManifest.source) as Record<string, unknown>;
+      oauthScopes = m.oauthScopes as string[] | undefined;
+      timeZone = m.timeZone as string | undefined;
+    }
+  } catch { /* best-effort */ }
+
   // Push to staging-source
-  await fileOps.updateProjectFiles(stagingSourceScriptId, prepared);
+  await fileOps.updateProjectFiles(stagingSourceScriptId!, prepared);
 
   // Verify push
-  const verifyFiles = await fileOps.getProjectFiles(stagingSourceScriptId);
+  const verifyFiles = await fileOps.getProjectFiles(stagingSourceScriptId!);
   if (verifyFiles.length < prepared.length) {
     return {
       success: false,
@@ -342,13 +487,14 @@ async function promoteToStaging(
 
   // Validate/repair consumer shim
   let consumerShimUpdated = false;
-  if (info.libStagingConsumerScriptId) {
+  if (stagingConsumerScriptId) {
     try {
       const shimResult = await validateAndRepairConsumerShim(
-        info.libStagingConsumerScriptId,
-        stagingSourceScriptId,
+        stagingConsumerScriptId,
+        stagingSourceScriptId!,
         userSymbol,
-        fileOps
+        fileOps,
+        { oauthScopes, timeZone },
       );
       consumerShimUpdated = shimResult.updated;
     } catch (e) {
@@ -359,15 +505,15 @@ async function promoteToStaging(
   // Sheet sync
   let sheetSyncResult: unknown;
   const devSpreadsheetId = await projectOps.getProjectParentId(scriptId);
-  if (devSpreadsheetId && info.libStagingSpreadsheetId) {
+  if (devSpreadsheetId && stagingSpreadsheetId) {
     try {
       sheetSyncResult = await syncSheets(
         devSpreadsheetId,
-        info.libStagingSpreadsheetId,
+        stagingSpreadsheetId,
         syncSheetsMode,
         scriptId,
         sessionManager,
-        { headUrl: info.headUrl }
+        { headUrl: localInfo.headUrl },
       );
     } catch (e) {
       hints.sheetSync = `Sheet sync failed: ${e instanceof Error ? e.message : String(e)}`;
@@ -380,26 +526,23 @@ async function promoteToStaging(
     try {
       propertySyncResult = await syncProperties(
         scriptId,
-        stagingSourceScriptId,
+        stagingSourceScriptId!,
         sessionManager,
         {
           reconcile: params.reconcileProperties,
-          consumerScriptId: info.libStagingConsumerScriptId,
-          sourceHeadUrl: info.headUrl,
-        }
+          consumerScriptId: stagingConsumerScriptId,
+          sourceHeadUrl: localInfo.headUrl,
+        },
       );
     } catch (e) {
       hints.propertySync = `Property sync failed: ${e instanceof Error ? e.message : String(e)}`;
     }
   }
 
-  // Store timestamp
+  // Store timestamp and userSymbol
   const promotedAt = new Date().toISOString();
-  const updates: Partial<DeploymentInfo> = {
-    libStagingPromotedAt: promotedAt,
-    libUserSymbol: userSymbol,
-  };
-  await setDeploymentInfo(localDir, scriptId, updates);
+  await storePromoteTimestamp(scriptId, localDir, 'staging', promotedAt, sessionManager, { headUrl: localInfo.headUrl });
+  await setDeploymentInfo(localDir, scriptId, { libUserSymbol: userSymbol });
 
   return {
     success: true,
@@ -407,9 +550,9 @@ async function promoteToStaging(
     scriptId,
     localDir,
     to: 'staging',
-    stagingSourceScriptId,
-    stagingConsumerScriptId: info.libStagingConsumerScriptId,
-    stagingSpreadsheetId: info.libStagingSpreadsheetId,
+    stagingSourceScriptId: stagingSourceScriptId!,
+    stagingConsumerScriptId,
+    stagingSpreadsheetId,
     stagingPromotedAt: promotedAt,
     filesPushed: prepared.length,
     consumerShimUpdated,
@@ -426,7 +569,6 @@ async function promoteToProd(
   scriptId: string,
   localDir: string,
   params: PromoteToolParams,
-  deployInfo: DeploymentInfo,
   fileOps: GASFileOperations,
   projectOps: GASProjectOperations,
   sessionManager: SessionManager,
@@ -435,10 +577,12 @@ async function promoteToProd(
   dryRun: boolean,
 ): Promise<PromoteToolResult> {
   const hints: Record<string, string> = {};
-  let info = { ...deployInfo };
 
-  // Resolve staging-source (escape hatch: params override)
-  const stagingSourceScriptId = params.stagingSourceScriptId ?? info.libStagingSourceScriptId;
+  const localInfo = await getDeploymentInfo(localDir, scriptId);
+  const envConfig = await getEnvironmentConfig(scriptId, localDir, sessionManager, { headUrl: localInfo.headUrl });
+
+  // Resolve staging-source (escape hatch: params override takes precedence)
+  const stagingSourceScriptId = params.stagingSourceScriptId ?? envConfig.staging.sourceScriptId;
   if (!stagingSourceScriptId && !dryRun) {
     return {
       success: false,
@@ -451,38 +595,42 @@ async function promoteToProd(
     };
   }
 
-  const userSymbol = await resolveUserSymbol(scriptId, localDir, params, projectOps);
+  const userSymbol = await resolveUserSymbol(scriptId, localDir, params, projectOps, sessionManager);
+
+  let prodSourceScriptId = envConfig.prod.sourceScriptId;
+  let prodSpreadsheetId = envConfig.prod.spreadsheetId;
+  let prodConsumerScriptId = envConfig.prod.consumerScriptId;
 
   // Create prod-source library if needed
-  if (!info.libProdSourceScriptId) {
+  if (!prodSourceScriptId) {
     if (dryRun) {
       hints.dryRun = 'Would create prod-source library.';
     } else {
       const created = await projectOps.createProject(`${userSymbol}-prod-source`);
-      info.libProdSourceScriptId = created.scriptId;
-      await setDeploymentInfo(localDir, scriptId, { libProdSourceScriptId: created.scriptId });
+      prodSourceScriptId = created.scriptId;
+      await storeEnvId(scriptId, localDir, CONFIG_KEYS.prod.sourceScriptId, 'libProdSourceScriptId', prodSourceScriptId, sessionManager, { headUrl: localInfo.headUrl });
     }
   }
 
   // Create prod spreadsheet if needed
-  if (!info.libProdSpreadsheetId) {
+  if (!prodSpreadsheetId) {
     if (dryRun) {
       hints.dryRun = (hints.dryRun ?? '') + ' Would create prod consumer spreadsheet.';
     } else {
       const spreadsheetId = await projectOps.createSpreadsheet(`${userSymbol} Production`);
-      info.libProdSpreadsheetId = spreadsheetId;
-      await setDeploymentInfo(localDir, scriptId, { libProdSpreadsheetId: spreadsheetId });
+      prodSpreadsheetId = spreadsheetId;
+      await storeEnvId(scriptId, localDir, CONFIG_KEYS.prod.spreadsheetId, 'libProdSpreadsheetId', prodSpreadsheetId, sessionManager, { headUrl: localInfo.headUrl });
     }
   }
 
   // Create prod consumer project if needed
-  if (!info.libProdConsumerScriptId && !dryRun) {
+  if (!prodConsumerScriptId && !dryRun) {
     const consumer = await projectOps.createProject(
       `${userSymbol}-prod-consumer`,
-      info.libProdSpreadsheetId
+      prodSpreadsheetId,
     );
-    info.libProdConsumerScriptId = consumer.scriptId;
-    await setDeploymentInfo(localDir, scriptId, { libProdConsumerScriptId: consumer.scriptId });
+    prodConsumerScriptId = consumer.scriptId;
+    await storeEnvId(scriptId, localDir, CONFIG_KEYS.prod.scriptId, 'libProdConsumerScriptId', prodConsumerScriptId, sessionManager, { headUrl: localInfo.headUrl });
   }
 
   if (dryRun) {
@@ -493,24 +641,34 @@ async function promoteToProd(
       localDir,
       to: 'prod',
       dryRun: true,
-      prodSourceScriptId: info.libProdSourceScriptId,
-      prodConsumerScriptId: info.libProdConsumerScriptId,
-      prodSpreadsheetId: info.libProdSpreadsheetId,
+      prodSourceScriptId,
+      prodConsumerScriptId,
+      prodSpreadsheetId,
       hints: { dryRun: 'Dry run complete. No changes made.' },
     };
   }
-
-  const prodSourceScriptId = info.libProdSourceScriptId!;
 
   // Read from staging-source (not dev) for prod promote
   const stagingFiles = await fileOps.getProjectFiles(stagingSourceScriptId!);
   const prepared = prepareFilesForDeploy(stagingFiles);
 
+  // Extract oauthScopes/timeZone from staging manifest for accurate shim repair
+  const stagingManifest = stagingFiles.find(f => f.name === 'appsscript');
+  let oauthScopes: string[] | undefined;
+  let timeZone: string | undefined;
+  try {
+    if (stagingManifest?.source) {
+      const m = JSON.parse(stagingManifest.source) as Record<string, unknown>;
+      oauthScopes = m.oauthScopes as string[] | undefined;
+      timeZone = m.timeZone as string | undefined;
+    }
+  } catch { /* best-effort */ }
+
   // Push to prod-source
-  await fileOps.updateProjectFiles(prodSourceScriptId, prepared);
+  await fileOps.updateProjectFiles(prodSourceScriptId!, prepared);
 
   // Verify push
-  const verifyFiles = await fileOps.getProjectFiles(prodSourceScriptId);
+  const verifyFiles = await fileOps.getProjectFiles(prodSourceScriptId!);
   if (verifyFiles.length < prepared.length) {
     return {
       success: false,
@@ -525,13 +683,14 @@ async function promoteToProd(
 
   // Validate/repair consumer shim
   let consumerShimUpdated = false;
-  if (info.libProdConsumerScriptId) {
+  if (prodConsumerScriptId) {
     try {
       const shimResult = await validateAndRepairConsumerShim(
-        info.libProdConsumerScriptId,
-        prodSourceScriptId,
+        prodConsumerScriptId,
+        prodSourceScriptId!,
         userSymbol,
-        fileOps
+        fileOps,
+        { oauthScopes, timeZone },
       );
       consumerShimUpdated = shimResult.updated;
     } catch (e) {
@@ -541,15 +700,15 @@ async function promoteToProd(
 
   // Sheet sync (from staging spreadsheet, not dev)
   let sheetSyncResult: unknown;
-  if (info.libStagingSpreadsheetId && info.libProdSpreadsheetId) {
+  if (envConfig.staging.spreadsheetId && prodSpreadsheetId) {
     try {
       sheetSyncResult = await syncSheets(
-        info.libStagingSpreadsheetId,
-        info.libProdSpreadsheetId,
+        envConfig.staging.spreadsheetId,
+        prodSpreadsheetId,
         syncSheetsMode,
         scriptId,
         sessionManager,
-        { headUrl: info.headUrl }
+        { headUrl: localInfo.headUrl },
       );
     } catch (e) {
       hints.sheetSync = `Sheet sync failed: ${e instanceof Error ? e.message : String(e)}`;
@@ -562,24 +721,22 @@ async function promoteToProd(
     try {
       propertySyncResult = await syncProperties(
         stagingSourceScriptId,
-        prodSourceScriptId,
+        prodSourceScriptId!,
         sessionManager,
         {
           reconcile: params.reconcileProperties,
-          consumerScriptId: info.libProdConsumerScriptId,
-        }
+          consumerScriptId: prodConsumerScriptId,
+        },
       );
     } catch (e) {
       hints.propertySync = `Property sync failed: ${e instanceof Error ? e.message : String(e)}`;
     }
   }
 
-  // Store timestamp
+  // Store timestamp and userSymbol
   const promotedAt = new Date().toISOString();
-  await setDeploymentInfo(localDir, scriptId, {
-    libProdPromotedAt: promotedAt,
-    libUserSymbol: userSymbol,
-  });
+  await storePromoteTimestamp(scriptId, localDir, 'prod', promotedAt, sessionManager, { headUrl: localInfo.headUrl });
+  await setDeploymentInfo(localDir, scriptId, { libUserSymbol: userSymbol });
 
   return {
     success: true,
@@ -588,9 +745,9 @@ async function promoteToProd(
     localDir,
     to: 'prod',
     stagingSourceScriptId: stagingSourceScriptId!,
-    prodSourceScriptId,
-    prodConsumerScriptId: info.libProdConsumerScriptId,
-    prodSpreadsheetId: info.libProdSpreadsheetId,
+    prodSourceScriptId: prodSourceScriptId!,
+    prodConsumerScriptId,
+    prodSpreadsheetId,
     prodPromotedAt: promotedAt,
     filesPushed: prepared.length,
     consumerShimUpdated,
@@ -609,42 +766,102 @@ async function handleStatus(
   scriptId: string,
   localDir: string,
   _params: PromoteToolParams,
+  fileOps: GASFileOperations,
   sessionManager: SessionManager,
 ): Promise<PromoteToolResult> {
-  const info = await getDeploymentInfo(localDir, scriptId);
+  const localInfo = await getDeploymentInfo(localDir, scriptId);
+  const envConfig = await getEnvironmentConfig(scriptId, localDir, sessionManager, { headUrl: localInfo.headUrl });
 
-  // Build structured status
+  // Read promoted-at timestamps from ConfigManager in parallel (fall back to gas-deploy.json)
+  const [cmStagingPromotedAt, cmProdPromotedAt] = await Promise.all([
+    getConfigValue(scriptId, CONFIG_KEYS.staging.promotedAt, sessionManager, { headUrl: localInfo.headUrl }),
+    getConfigValue(scriptId, CONFIG_KEYS.prod.promotedAt, sessionManager, { headUrl: localInfo.headUrl }),
+  ]);
+
+  const scriptUrl = (id: string) => `https://script.google.com/d/${id}/edit`;
+
+  // Live discrepancy check — verify consumer manifests reference the correct source library
+  const discrepancies: string[] = [];
+
+  if (envConfig.staging.sourceScriptId && envConfig.staging.consumerScriptId) {
+    try {
+      const consumerFiles = await fileOps.getProjectFiles(envConfig.staging.consumerScriptId);
+      const manifestFile = consumerFiles.find(f => f.name === 'appsscript');
+      if (manifestFile?.source) {
+        const manifest = JSON.parse(manifestFile.source) as Record<string, unknown>;
+        const deps = manifest.dependencies as { libraries?: Array<Record<string, unknown>> } | undefined;
+        const libRef = deps?.libraries?.[0];
+        if (!libRef || libRef.libraryId !== envConfig.staging.sourceScriptId || libRef.developmentMode !== true) {
+          discrepancies.push('staging: consumer manifest references wrong source library');
+        }
+      }
+    } catch {
+      discrepancies.push('staging: failed to verify consumer manifest');
+    }
+  }
+
+  if (envConfig.prod.sourceScriptId && envConfig.prod.consumerScriptId) {
+    try {
+      const consumerFiles = await fileOps.getProjectFiles(envConfig.prod.consumerScriptId);
+      const manifestFile = consumerFiles.find(f => f.name === 'appsscript');
+      if (manifestFile?.source) {
+        const manifest = JSON.parse(manifestFile.source) as Record<string, unknown>;
+        const deps = manifest.dependencies as { libraries?: Array<Record<string, unknown>> } | undefined;
+        const libRef = deps?.libraries?.[0];
+        if (!libRef || libRef.libraryId !== envConfig.prod.sourceScriptId || libRef.developmentMode !== true) {
+          discrepancies.push('prod: consumer manifest references wrong source library');
+        }
+      }
+    } catch {
+      discrepancies.push('prod: failed to verify consumer manifest');
+    }
+  }
+
+  const stagingDiscrepancies = discrepancies.filter(d => d.startsWith('staging:'));
+  const prodDiscrepancies = discrepancies.filter(d => d.startsWith('prod:'));
+
   const dev: Record<string, unknown> = {
     scriptId,
-    headUrl: info.headUrl,
-    gcpSwitched: info.gcpSwitched ?? false,
+    headUrl: localInfo.headUrl,
+    gcpSwitched: localInfo.gcpSwitched ?? false,
   };
 
   const staging: Record<string, unknown> = {
-    sourceScriptId: info.libStagingSourceScriptId,
-    consumerScriptId: info.libStagingConsumerScriptId,
-    spreadsheetId: info.libStagingSpreadsheetId,
-    promotedAt: info.libStagingPromotedAt,
+    sourceScriptId:   envConfig.staging.sourceScriptId,
+    sourceScriptUrl:  envConfig.staging.sourceScriptId  ? scriptUrl(envConfig.staging.sourceScriptId)  : undefined,
+    consumerScriptId: envConfig.staging.consumerScriptId,
+    consumerScriptUrl: envConfig.staging.consumerScriptId ? scriptUrl(envConfig.staging.consumerScriptId) : undefined,
+    spreadsheetId:    envConfig.staging.spreadsheetId,
+    spreadsheetUrl:   envConfig.staging.spreadsheetId
+      ? `https://docs.google.com/spreadsheets/d/${envConfig.staging.spreadsheetId}`
+      : undefined,
+    lastPromotedAt: cmStagingPromotedAt ?? localInfo.libStagingPromotedAt,
+    ...(stagingDiscrepancies.length > 0 ? { discrepancies: stagingDiscrepancies } : {}),
   };
 
   const prod: Record<string, unknown> = {
-    sourceScriptId: info.libProdSourceScriptId,
-    consumerScriptId: info.libProdConsumerScriptId,
-    spreadsheetId: info.libProdSpreadsheetId,
-    promotedAt: info.libProdPromotedAt,
+    sourceScriptId:   envConfig.prod.sourceScriptId,
+    sourceScriptUrl:  envConfig.prod.sourceScriptId  ? scriptUrl(envConfig.prod.sourceScriptId)  : undefined,
+    consumerScriptId: envConfig.prod.consumerScriptId,
+    consumerScriptUrl: envConfig.prod.consumerScriptId ? scriptUrl(envConfig.prod.consumerScriptId) : undefined,
+    spreadsheetId:    envConfig.prod.spreadsheetId,
+    spreadsheetUrl:   envConfig.prod.spreadsheetId
+      ? `https://docs.google.com/spreadsheets/d/${envConfig.prod.spreadsheetId}`
+      : undefined,
+    lastPromotedAt: cmProdPromotedAt ?? localInfo.libProdPromotedAt,
+    ...(prodDiscrepancies.length > 0 ? { discrepancies: prodDiscrepancies } : {}),
   };
 
   const hints = generatePromoteHints('status');
 
-  if (!info.libStagingSourceScriptId) {
+  if (!envConfig.staging.sourceScriptId) {
     hints.staging = 'No staging environment yet. Run promote({to: "staging"}) to create.';
   }
-  if (!info.libProdSourceScriptId && info.libStagingSourceScriptId) {
+  if (!envConfig.prod.sourceScriptId && envConfig.staging.sourceScriptId) {
     hints.prod = 'No prod environment yet. Run promote({to: "prod"}) after validating staging.';
   }
-
-  if (info.libConfigManagerSyncFailed) {
-    hints.configManagerSync = 'ConfigManager sync failed on last promote. Re-run promote to retry.';
+  if (discrepancies.length > 0) {
+    hints.discrepancies = `Consumer manifest discrepancies detected: ${discrepancies.join('; ')}. Re-run promote to repair.`;
   }
 
   return {
@@ -665,7 +882,7 @@ async function handleSetup(
   params: PromoteToolParams,
   fileOps: GASFileOperations,
   projectOps: GASProjectOperations,
-  _sessionManager: SessionManager,
+  sessionManager: SessionManager,
 ): Promise<PromoteToolResult> {
   const templateScriptId = params.templateScriptId;
   if (!templateScriptId) {
@@ -679,8 +896,19 @@ async function handleSetup(
     };
   }
 
+  if (templateScriptId === scriptId) {
+    return {
+      success: false,
+      operation: 'setup',
+      scriptId,
+      localDir,
+      error: 'templateScriptId must be a different project from the library scriptId.',
+      hints: { fix: 'The library cannot depend on itself.' },
+    };
+  }
+
   const deployInfo = await getDeploymentInfo(localDir, scriptId);
-  const userSymbol = await resolveUserSymbol(scriptId, localDir, params, projectOps);
+  const userSymbol = await resolveUserSymbol(scriptId, localDir, params, projectOps, sessionManager);
 
   // Need a source scriptId to wire against
   const sourceId = deployInfo.libStagingSourceScriptId;
@@ -734,19 +962,21 @@ async function handleSetup(
 
 /**
  * Validate/repair the consumer shim to ensure it references the correct source library.
+ * Passes oauthScopes and timeZone from the source manifest when available.
  */
 async function validateAndRepairConsumerShim(
   consumerScriptId: string,
   sourceScriptId: string,
   userSymbol: string,
   fileOps: GASFileOperations,
+  sourceManifest?: { oauthScopes?: string[]; timeZone?: string },
 ): Promise<{ valid: boolean; updated: boolean; issue?: string }> {
   const files = await fileOps.getProjectFiles(consumerScriptId);
   const manifestFile = files.find(f => f.name === 'appsscript');
 
   if (!manifestFile?.source) {
     // No manifest — write fresh
-    const consumerManifest = buildConsumerManifest(sourceScriptId, userSymbol);
+    const consumerManifest = buildConsumerManifest(sourceScriptId, userSymbol, sourceManifest?.oauthScopes, sourceManifest?.timeZone);
     const shimCode = generateShimCode(userSymbol);
     const newFiles = [
       { name: 'appsscript', type: 'JSON' as const, source: JSON.stringify(consumerManifest, null, 2) },
@@ -771,7 +1001,7 @@ async function validateAndRepairConsumerShim(
     libRef.developmentMode !== true;
 
   if (needsUpdate) {
-    const consumerManifest = buildConsumerManifest(sourceScriptId, userSymbol);
+    const consumerManifest = buildConsumerManifest(sourceScriptId, userSymbol, sourceManifest?.oauthScopes, sourceManifest?.timeZone);
     const shimCode = generateShimCode(userSymbol);
     const updatedFiles = files.map(f => {
       if (f.name === 'appsscript') return { ...f, source: JSON.stringify(consumerManifest, null, 2) };
@@ -791,19 +1021,32 @@ async function validateAndRepairConsumerShim(
 }
 
 /**
- * Resolve userSymbol from: params → gas-deploy.json → derive from project title.
+ * Resolve userSymbol from: params → ConfigManager USER_SYMBOL → gas-deploy.json → project title.
  */
 async function resolveUserSymbol(
   scriptId: string,
   localDir: string,
   params: PromoteToolParams,
   projectOps: GASProjectOperations | null,
+  sessionManager: SessionManager,
 ): Promise<string> {
   if (params.userSymbol) {
     validateUserSymbol(params.userSymbol);
     return params.userSymbol;
   }
 
+  // Try ConfigManager first (authoritative cross-tool store)
+  try {
+    const cmSymbol = await getConfigValue(scriptId, CONFIG_KEYS.userSymbol, sessionManager);
+    if (cmSymbol) {
+      validateUserSymbol(cmSymbol);
+      return cmSymbol;
+    }
+  } catch {
+    // Fall through
+  }
+
+  // Fallback: gas-deploy.json
   try {
     const info = await getDeploymentInfo(localDir, scriptId);
     if (info.libUserSymbol) return info.libUserSymbol;
