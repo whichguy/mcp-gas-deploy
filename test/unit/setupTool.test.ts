@@ -237,7 +237,9 @@ describe('handleSetupTool', () => {
   });
 
   it('script — does NOT persist gcpSwitched when scriptsRunVerified is false', async () => {
-    // GCP switch succeeds but scripts.run verify fails (no real project) — gcpSwitched must NOT be written
+    // GCP switch succeeds but scripts.run verify fails immediately — gcpSwitched must NOT be written
+    sinon.stub(globalThis, 'fetch' as never).resolves({ ok: false, status: 401, text: async () => 'Unauthorized' } as Response);
+
     const sessionMgr = makeSessionManager('test-token');
     const fileOps = makeFileOps({ timeZone: 'UTC', executionApi: { access: 'MYSELF' } });
     const devtools = makeDevtools(true); // GCP switch succeeds
@@ -249,17 +251,18 @@ describe('handleSetupTool', () => {
       devtools
     );
 
+    // setRootConfig writes _config unconditionally (not gated by scriptsRunVerified) → file always exists
+    // config[VALID_SCRIPT_ID] is absent: setDeploymentInfo only runs when scriptsRunVerified=true
     const configPath = path.join(tmpDir, 'gas-deploy.json');
-    const exists = await fs.access(configPath).then(() => true).catch(() => false);
-    if (exists) {
-      const config = JSON.parse(await fs.readFile(configPath, 'utf-8'));
-      assert.equal(
-        config[VALID_SCRIPT_ID]?.gcpSwitched,
-        undefined,
-        'gcpSwitched must not be written when scriptsRunVerified is false'
-      );
-    }
-    // If gas-deploy.json was not written at all, gcpSwitched is also absent — test passes
+    const config = JSON.parse(await fs.readFile(configPath, 'utf-8'));
+    // Positive assertion: confirms setRootConfig actually ran (not a vacuous check)
+    assert.equal(config._config?.gcpProjectNumber, GCP_PROJECT_NUMBER, 'setRootConfig must write gcpProjectNumber unconditionally');
+    // Regression assertion: gcpSwitched must not appear under scriptId when verify failed
+    assert.equal(
+      config[VALID_SCRIPT_ID]?.gcpSwitched,
+      undefined,
+      'gcpSwitched must not be written when scriptsRunVerified is false'
+    );
   });
 
   it('script — skips manifest push when executionApi already set', async () => {
