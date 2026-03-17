@@ -21,6 +21,7 @@ import { executeViaScriptsRun } from '../utils/scriptsRunExecutor.js';
 import type { ValidationResult } from '../validation/commonjsValidator.js';
 import { SchemaFragments } from '../utils/schemaFragments.js';
 import { GuidanceFragments } from '../utils/guidanceFragments.js';
+import { getAuthHint } from '../utils/authHints.js';
 
 export interface ExecToolParams {
   scriptId?: string;
@@ -272,12 +273,23 @@ export async function handleExecTool(
   }
 
   // Get auth token
-  const token = await sessionManager.getValidToken();
-  if (!token) {
+  let token: string | null = null;
+  try {
+    token = await sessionManager.getValidToken();
+  } catch {
+    const hint = await getAuthHint(sessionManager);
     return {
       success: false,
-      error: 'Not authenticated',
-      hints: { fix: 'Run auth with action="login"' },
+      error: hint,
+      hints: { fix: hint },
+    };
+  }
+  if (!token) {
+    const hint = await getAuthHint(sessionManager);
+    return {
+      success: false,
+      error: hint,
+      hints: { fix: hint },
     };
   }
 

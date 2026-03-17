@@ -14,6 +14,7 @@ import { TRIGGER_ID_PATTERN, FUNCTION_PATTERN } from '../utils/validation.js';
 import { executeRawJs, escapeGasString } from '../utils/gasExecutor.js';
 import { SchemaFragments } from '../utils/schemaFragments.js';
 import { GuidanceFragments } from '../utils/guidanceFragments.js';
+import { getAuthHint } from '../utils/authHints.js';
 
 // --- Types ---
 
@@ -461,12 +462,23 @@ export async function handleTriggerTool(
     const { scriptId, localDir: resolvedDir } = resolved;
 
     // Auth check
-    const token = await sessionManager.getValidToken();
-    if (!token) {
+    let token: string | null = null;
+    try {
+      token = await sessionManager.getValidToken();
+    } catch {
+      const hint = await getAuthHint(sessionManager);
       return {
         success: false, action,
-        error: 'Not authenticated',
-        hints: { fix: "Run auth with action='login' first" },
+        error: hint,
+        hints: { fix: hint },
+      };
+    }
+    if (!token) {
+      const hint = await getAuthHint(sessionManager);
+      return {
+        success: false, action,
+        error: hint,
+        hints: { fix: hint },
       };
     }
 
