@@ -313,7 +313,7 @@ export async function handleDeployTool(
         success: false,
         action: 'list-versions',
         error: `Failed to list versions: ${message}`,
-        hints: { fix: `Failed to list versions for scriptId=${scriptId}. Check authentication and project permissions.` },
+        hints: { fix: `Failed to list versions for scriptId=${scriptId}. Authentication failed — token may be expired. Run auth action="login" to re-authenticate.` },
       };
     }
   }
@@ -438,7 +438,7 @@ export async function handleDeployTool(
         environment: to,
         error: `Rollback failed: ${message}`,
         hints: {
-          fix: 'Check authentication and project permissions.',
+          fix: 'Authentication failed — token may be expired. Run auth action="login" to re-authenticate.',
           context: buildHintContext(deployInfo ?? {}, to),
         },
       };
@@ -592,7 +592,7 @@ export async function handleDeployTool(
         success: false, action,
         error: `Promote failed: ${message}`,
         hints: {
-          fix: `Check authentication. Staging v${deployInfo?.stagingVersionNumber ?? '?'} → prod deployment ${deployInfo?.prodDeploymentId ?? '?'}.`,
+          fix: `Authentication failed — token may be expired. Run auth action="login" to re-authenticate. Staging v${deployInfo?.stagingVersionNumber ?? '?'} → prod deployment ${deployInfo?.prodDeploymentId ?? '?'}.`,
           context: buildHintContext(deployInfo ?? {}),
         },
       };
@@ -619,7 +619,7 @@ export async function handleDeployTool(
         hints: {
           fix: pushResult.error?.includes('Validation')
             ? 'Fix CommonJS validation errors above, then retry action=deploy'
-            : 'Check authentication and network, then retry action=deploy',
+            : 'Authentication failed — token may be expired. Run auth action="login" to re-authenticate.',
         },
       };
     }
@@ -789,7 +789,7 @@ export async function handleDeployTool(
       success: false, action, environment: 'staging',
       error: `Deploy failed: ${message}`,
       hints: {
-        fix: 'Check authentication and project permissions. If deploy failed after version creation, re-run action=deploy to re-pin.',
+        fix: 'Authentication failed — token may be expired. Run auth action="login" to re-authenticate. If deploy failed after version creation, re-run action=deploy to re-pin.',
         context: buildHintContext(deployInfo ?? {}, 'staging'),
       },
     };

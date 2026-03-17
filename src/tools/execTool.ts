@@ -44,7 +44,7 @@ export interface ExecToolResult {
 
 export const EXEC_TOOL_DEFINITION = {
   name: 'exec',
-  description: '[EXEC] Run GAS code — auto-pushes local files first. Uses scripts.run (no browser auth) for GCP-switched projects, web app URL otherwise. Two modes: (1) function mode: exec({scriptId, function, module?, args?}), (2) js_statement mode: exec({scriptId, js_statement}). WHEN: testing functions, verifying deployed behavior, running ad-hoc JS.',
+  description: '[EXEC] Run GAS code — auto-pushes local files first. Uses scripts.run first on all execs (no browser auth); falls back to web app URL on 404 if available. Two modes: (1) function mode: exec({scriptId, function, module?, args?}), (2) js_statement mode: exec({scriptId, js_statement}). WHEN: testing functions, verifying deployed behavior, running ad-hoc JS.',
   annotations: {
     title: 'Execute GAS Function',
     readOnlyHint: false,
@@ -200,47 +200,8 @@ export async function handleExecTool(
   const deployInfo = await getDeploymentInfo(resolvedDir, scriptId);
   const isGcpSwitched = !!(deployInfo as Record<string, unknown>).gcpSwitched;
 
-  // Pre-exec guard: non-GCP-switched projects need a deployment URL
-  if (!isGcpSwitched) {
-    const anyUrl = deployInfo.headUrl ?? deployInfo.stagingUrl ?? deployInfo.prodUrl;
-    if (!anyUrl) {
-      return {
-        success: false,
-        error: 'No deployment URL found',
-        hints: { fix: 'No deployment URL found in gas-deploy.json (checked headUrl, stagingUrl, prodUrl). Run action=deploy to create a web app deployment, or use fork to enable scripts.run (no deploy needed).' },
-      };
-    }
-  }
-
-  // Resolve HEAD URL for web-app path (skip for GCP-switched)
-  let headUrl: string | undefined;
-  if (!isGcpSwitched) {
-    headUrl = deployInfo.headUrl;
-    if (!headUrl) {
-      try {
-        const headDeployment = await deployOps.getOrCreateHeadDeployment(scriptId);
-        if (!headDeployment.webAppUrl) {
-          return {
-            success: false,
-            error: 'HEAD deployment created but returned no web app URL — ensure the script has a web app entry point configured in appsscript.json',
-            hints: { fix: 'Add webapp access config to appsscript.json, redeploy, then retry' },
-          };
-        }
-        headUrl = headDeployment.webAppUrl;
-        await setDeploymentInfo(resolvedDir, scriptId, {
-          headUrl,
-          headDeploymentId: headDeployment.deploymentId,
-        });
-      } catch (error: unknown) {
-        const message = error instanceof Error ? error.message : String(error);
-        return {
-          success: false,
-          error: `Failed to get HEAD deployment: ${message}`,
-          hints: { fix: 'Check authentication and ensure the script has a web app entry point' },
-        };
-      }
-    }
-  }
+  // Resolve headUrl from config for web-app fallback after scripts.run 404
+  const headUrl: string | undefined = deployInfo.headUrl;
 
   // AUTO_PUSH: always push all local files before exec
   let filesSync = 0;
@@ -304,122 +265,133 @@ export async function handleExecTool(
       : `require('runner-api').${functionName}(${argsList})`;
   }
 
-  // --- Execute: branch on gcpSwitched ---
-  if (isGcpSwitched) {
-    // scripts.run path — no browser auth, no deployment URL needed
-    try {
-      const spreadsheetId = (deployInfo as Record<string, unknown>).spreadsheetId as string | undefined;
-      const runResult = await executeViaScriptsRun(scriptId, jsStatement, token, { spreadsheetId });
+  // --- Execute: try scripts.run first, always ---
+  const spreadsheetId = (deployInfo as Record<string, unknown>).spreadsheetId as string | undefined;
+  const scriptsRunResult = await executeViaScriptsRun(scriptId, jsStatement, token, { spreadsheetId });
 
-      if (!runResult.success) {
-        return {
-          success: false, filesSync,
-          error: runResult.error,
-          hints: {
-            fix: runResult.hint ?? 'Check JavaScript syntax and ensure apiExec function exists.',
-            execMode: 'scripts.run (auth-free)',
-            invocation: jsStatement,
-          },
-        };
-      }
-
-      const successHints: Record<string, string> = { execMode: 'scripts.run (auth-free)' };
-      if (resolved.resolvedFrom === 'clasp-json') {
-        successHints.scriptId = `Using scriptId ${scriptId} from .clasp.json`;
-      }
-      successHints.next = `${jsStatementParam ? 'JavaScript statement' : 'Function'} executed via scripts.run. ${filesSync} files pushed before execution.`;
-      if (jsStatementParam && !jsStatementParam.trimStart().startsWith('return')) {
-        successHints.returnPrefix = 'js_statement does not start with "return" — result will be undefined for expression-only code. Prefix with "return" for a non-void result.';
-      }
-
-      return {
-        success: true,
-        result: runResult.result,
-        logs: runResult.logs,
-        filesSync,
-        hints: successHints,
-      };
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : String(error);
-      return {
-        success: false, filesSync,
-        error: `scripts.run execution failed: ${message}`,
-        hints: {
-          fix: 'Check scripts.run error details. Ensure GCP project is switched and apiExec function exists.',
-          execMode: 'scripts.run (auth-free)',
-        },
-      };
-    }
-  }
-
-  // --- Web app path (non-GCP-switched) ---
-  try {
-    const rawResult = await executeRawJs(jsStatement, headUrl!, token);
-
-    if (!rawResult.success) {
-      const isBrowserAuth = rawResult.error?.includes('browser authorization');
-      const isJsStatementMode = !!jsStatementParam;
-
-      const hints: Record<string, string> = {
-        fix: isBrowserAuth
-          ? 'Open the deployment URL in a browser signed in as the script owner, then retry exec'
-          : isJsStatementMode
-            ? 'Check your JavaScript statement for syntax or runtime errors.'
-            : 'Check the function and module names, ensure function is exported inside _main().',
-      };
-
-      if (isBrowserAuth) {
-        if (!isJsStatementMode) {
-          hints.exports = 'Function must be exported inside _main(): exports.myFn = function(){...} — bare function declarations are NOT callable via exec';
-        }
-        hints.browserAuth = [
-          `Automate browser auth with chrome-devtools MCP:`,
-          `1. mcp__chrome-devtools__navigate_page url="${headUrl}" — opens the auth page`,
-          `2. mcp__chrome-devtools__wait_for text="You need to authorize" — wait for consent UI`,
-          `3. mcp__chrome-devtools__take_screenshot — verify the consent page loaded`,
-          `4. mcp__chrome-devtools__click element="Allow" — click the Allow button (may need to identify by aria label or text)`,
-          `5. mcp__chrome-devtools__wait_for text="can close" OR timeout 10s — wait for success`,
-          `6. mcp__chrome-devtools__close_page — clean up`,
-          `7. Retry exec — auth is now cached for this project`,
-        ].join('\n');
-      } else {
-        hints.invocation = jsStatement;
-      }
-
-      return {
-        success: false, filesSync,
-        error: rawResult.error,
-        logs: rawResult.logs,
-        hints,
-      };
+  if (scriptsRunResult.success) {
+    // Opportunistically persist gcpSwitched if it wasn't already set
+    if (!isGcpSwitched) {
+      try { await setDeploymentInfo(resolvedDir, scriptId, { gcpSwitched: true }); } catch { /* non-fatal: best-effort persist */ }
     }
 
-    // Return prefix hint: if js_statement mode and statement doesn't start with 'return', warn
-    const successHints: Record<string, string> = {};
+    const successHints: Record<string, string> = { execMode: 'scripts.run' };
     if (resolved.resolvedFrom === 'clasp-json') {
       successHints.scriptId = `Using scriptId ${scriptId} from .clasp.json`;
     }
-    successHints.next = `${jsStatementParam ? 'JavaScript statement' : 'Function'} executed. ${filesSync} files pushed before execution.`;
+    successHints.next = `${filesSync} files pushed. Executed via scripts.run.`;
     if (jsStatementParam && !jsStatementParam.trimStart().startsWith('return')) {
       successHints.returnPrefix = 'js_statement does not start with "return" — result will be undefined for expression-only code. Prefix with "return" for a non-void result.';
     }
 
     return {
       success: true,
-      result: rawResult.result,
-      logs: rawResult.logs,
+      result: scriptsRunResult.result,
+      logs: scriptsRunResult.logs,
       filesSync,
       hints: successHints,
     };
-  } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
+  }
+
+  // scripts.run failed — inspect error
+  const is404 = scriptsRunResult.error?.includes('scripts.run 404:') === true;
+  const authHint = await getAuthHint(sessionManager);
+
+  if (is404) {
+    // Fall back to web-app if headUrl is available
+    if (headUrl) {
+      // --- Web-app fallback ---
+      try {
+        const rawResult = await executeRawJs(jsStatement, headUrl, token);
+
+        if (!rawResult.success) {
+          const isBrowserAuth = rawResult.error?.includes('browser authorization');
+          const isJsStatementMode = !!jsStatementParam;
+
+          const hints: Record<string, string> = {
+            fix: isBrowserAuth
+              ? 'Open the deployment URL in a browser signed in as the script owner, then retry exec'
+              : isJsStatementMode
+                ? 'Check your JavaScript statement for syntax or runtime errors.'
+                : 'Check the function and module names, ensure function is exported inside _main().',
+          };
+
+          if (isBrowserAuth) {
+            if (!isJsStatementMode) {
+              hints.exports = 'Function must be exported inside _main(): exports.myFn = function(){...} — bare function declarations are NOT callable via exec';
+            }
+            hints.browserAuth = [
+              `Automate browser auth with chrome-devtools MCP:`,
+              `1. mcp__chrome-devtools__navigate_page url="${headUrl}" — opens the auth page`,
+              `2. mcp__chrome-devtools__wait_for text="You need to authorize" — wait for consent UI`,
+              `3. mcp__chrome-devtools__take_screenshot — verify the consent page loaded`,
+              `4. mcp__chrome-devtools__click element="Allow" — click the Allow button (may need to identify by aria label or text)`,
+              `5. mcp__chrome-devtools__wait_for text="can close" OR timeout 10s — wait for success`,
+              `6. mcp__chrome-devtools__close_page — clean up`,
+              `7. Retry exec — auth is now cached for this project`,
+            ].join('\n');
+          } else {
+            hints.invocation = jsStatement;
+          }
+
+          return {
+            success: false, filesSync,
+            error: rawResult.error,
+            logs: rawResult.logs,
+            hints,
+          };
+        }
+
+        // Return prefix hint: if js_statement mode and statement doesn't start with 'return', warn
+        const successHints: Record<string, string> = {};
+        if (resolved.resolvedFrom === 'clasp-json') {
+          successHints.scriptId = `Using scriptId ${scriptId} from .clasp.json`;
+        }
+        successHints.next = `${jsStatementParam ? 'JavaScript statement' : 'Function'} executed. ${filesSync} files pushed before execution.`;
+        if (jsStatementParam && !jsStatementParam.trimStart().startsWith('return')) {
+          successHints.returnPrefix = 'js_statement does not start with "return" — result will be undefined for expression-only code. Prefix with "return" for a non-void result.';
+        }
+
+        return {
+          success: true,
+          result: rawResult.result,
+          logs: rawResult.logs,
+          filesSync,
+          hints: successHints,
+        };
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+        return {
+          success: false, filesSync,
+          error: `Execution failed: ${message}`,
+          hints: {
+            fix: `Execution failed against ${headUrl ?? 'unknown URL'}. Check the deployment URL and function name.`,
+            context: buildHintContext(deployInfo),
+          },
+        };
+      }
+    }
+
+    // No web-app URL — return setup hint
     return {
-      success: false, filesSync,
-      error: `Execution failed: ${message}`,
+      success: false,
+      filesSync,
+      error: 'scripts.run returned 404: project is not linked to a Standard GCP project.',
       hints: {
-        fix: `Execution failed against ${headUrl ?? 'unknown URL'}. Check the deployment URL and function name.`,
-        context: buildHintContext(deployInfo),
+        fix: 'Run setup operation=script with your GCP project number and chrome-devtools to enable direct execution.',
+        learnMore: 'The GCP project must have the Apps Script API enabled. Find your project number in GCP Console → Project Settings.',
       },
     };
   }
+
+  // Non-404 failure (auth error, timeout, etc.)
+  return {
+    success: false,
+    filesSync,
+    error: scriptsRunResult.error,
+    hints: {
+      fix: scriptsRunResult.hint ?? authHint,
+      execMode: 'scripts.run (failed)',
+    },
+  };
 }

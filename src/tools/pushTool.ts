@@ -203,7 +203,7 @@ export async function handlePushTool(
       success: false,
       filesPushed: [],
       error: result.error,
-      hints: { fix: `Push failed for scriptId=${scriptId}: ${result.error}. Check authentication and that the project exists.` },
+      hints: { fix: `Push failed for scriptId=${scriptId}: ${result.error}. Authentication failed — token may be expired. Run auth action="login" to re-authenticate.` },
     };
   }
 
