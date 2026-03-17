@@ -2,7 +2,7 @@
  * Unit tests for handleExecTool
  *
  * Tests: input validation, pre-exec guards, execution flow (push/auth/fetch),
- * redirect following, and workspace URL normalization.
+ * redirect following, workspace URL normalization, scripts.run-first routing.
  * Uses sinon stubs for GASFileOperations, GASDeployOperations, SessionManager, and fetch.
  */
 
@@ -42,6 +42,7 @@ function makeDeployOps(headUrl: string = HEAD_URL): GASDeployOperations {
 function makeSession(token: string | null = 'test-token'): SessionManager {
   return {
     getValidToken: sinon.stub().resolves(token),
+    getAuthStatus: sinon.stub().resolves({ authenticated: false, tokenValid: false }),
   } as unknown as SessionManager;
 }
 
@@ -65,6 +66,30 @@ function makeFetchResponse(opts: {
     text: sinon.stub().resolves(textBody),
     headers: { get: (name: string) => headers[name.toLowerCase()] ?? null },
   } as unknown as Response;
+}
+
+/** Scripts.run success response wrapper */
+function makeScriptsRunSuccess(result: unknown): Response {
+  return new Response(JSON.stringify({
+    done: true,
+    response: { result: { success: true, result } },
+  }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+}
+
+/** Scripts.run 404 response (not linked to GCP) */
+function makeScriptsRun404(): Response {
+  return new Response('Not Found', { status: 404 });
+}
+
+/**
+ * Make a fetch stub that returns 404 for scripts.run calls and the given response for web-app calls.
+ * Used for tests that exercise the web-app fallback path.
+ */
+function stubFetchScriptsRun404ThenWebApp(webAppResponse: Response): sinon.SinonStub {
+  return sinon.stub(globalThis, 'fetch').callsFake(async (url: string | URL | Request) => {
+    if (String(url).includes(':run')) return makeScriptsRun404();
+    return webAppResponse;
+  });
 }
 
 describe('handleExecTool', () => {
@@ -170,8 +195,8 @@ describe('handleExecTool', () => {
     assert.ok(result.error?.includes('args') && result.error?.includes('js_statement'), `got: ${result.error}`);
   });
 
-  it('js_statement is sent directly to fetch without function validation', async () => {
-    const fetchStub = sinon.stub(globalThis, 'fetch').resolves(
+  it('js_statement is sent to fetch (scripts.run 404 → web-app fallback with raw body)', async () => {
+    const fetchStub = stubFetchScriptsRun404ThenWebApp(
       makeFetchResponse({
         status: 200,
         json: { success: true, result: 4 },
@@ -186,14 +211,15 @@ describe('handleExecTool', () => {
     assert.equal(result.success, true);
     assert.equal(result.result, 4);
     assert.ok(fetchStub.called, 'fetch should have been called');
-    // Verify the body contains the raw js_statement
-    const callArgs = fetchStub.firstCall.args[1] as RequestInit;
-    const body = JSON.parse(callArgs.body as string);
+    // Verify the web-app call body contains the raw js_statement
+    const webAppCall = fetchStub.getCalls().find(c => !String(c.args[0]).includes(':run'));
+    assert.ok(webAppCall, 'web-app call should have been made');
+    const body = JSON.parse((webAppCall!.args[1] as RequestInit).body as string);
     assert.equal(body.func, 'return 2+2');
   });
 
   it('js_statement with trailing underscore function skips fn validation', async () => {
-    sinon.stub(globalThis, 'fetch').resolves(
+    stubFetchScriptsRun404ThenWebApp(
       makeFetchResponse({
         status: 200,
         json: { success: true, result: 'ok' },
@@ -209,8 +235,8 @@ describe('handleExecTool', () => {
     assert.equal(result.success, true);
   });
 
-  it('js_statement without return prefix emits returnPrefix hint on success', async () => {
-    sinon.stub(globalThis, 'fetch').resolves(
+  it('js_statement without return prefix emits returnPrefix hint on success (web-app path)', async () => {
+    stubFetchScriptsRun404ThenWebApp(
       makeFetchResponse({
         status: 200,
         json: { success: true, result: undefined },
@@ -227,8 +253,8 @@ describe('handleExecTool', () => {
     assert.ok(result.hints.returnPrefix?.includes('return'), `hint should mention "return", got: ${result.hints.returnPrefix}`);
   });
 
-  it('js_statement with return prefix does not emit returnPrefix hint on success', async () => {
-    sinon.stub(globalThis, 'fetch').resolves(
+  it('js_statement with return prefix does not emit returnPrefix hint on success (web-app path)', async () => {
+    stubFetchScriptsRun404ThenWebApp(
       makeFetchResponse({
         status: 200,
         json: { success: true, result: 4 },
@@ -245,7 +271,7 @@ describe('handleExecTool', () => {
   });
 
   it('js_statement failure hint mentions JavaScript statement, not _main()', async () => {
-    sinon.stub(globalThis, 'fetch').resolves(
+    stubFetchScriptsRun404ThenWebApp(
       makeFetchResponse({
         status: 200,
         json: { success: false, error: 'ReferenceError: foo is not defined' },
@@ -263,7 +289,7 @@ describe('handleExecTool', () => {
   });
 
   it('js_statement browser auth error does not include exports hint', async () => {
-    sinon.stub(globalThis, 'fetch').resolves(
+    stubFetchScriptsRun404ThenWebApp(
       makeFetchResponse({
         status: 403,
         text: '<!DOCTYPE html><html><body>Sign in</body></html>',
@@ -299,16 +325,21 @@ describe('handleExecTool', () => {
     assert.ok(result.hints.fix?.includes('pull'), `hint should mention pull, got: ${result.hints.fix}`);
   });
 
-  it('returns error when no deployment URL in gas-deploy.json', async () => {
-    // Override: entry exists but has no URL fields
+  it('returns 404 setup hint when no deployment URL and no GCP link (scripts.run 404 path)', async () => {
+    // Override: entry exists but has no URL fields and no gcpSwitched
     await writeDeployConfig(tmpDir, { [VALID_SCRIPT_ID]: {} });
+
+    // scripts.run returns 404 (no GCP link), no headUrl to fall back to
+    sinon.stub(globalThis, 'fetch').resolves(makeScriptsRun404());
 
     const result = await handleExecTool(
       { scriptId: VALID_SCRIPT_ID, function: 'myFn', localDir: tmpDir },
       makeFileOps(), makeSession(), makeDeployOps(),
     );
     assert.equal(result.success, false);
-    assert.ok(result.error?.includes('No deployment URL'), `got: ${result.error}`);
+    assert.ok(result.error?.includes('404') || result.error?.includes('not linked'), `got: ${result.error}`);
+    assert.ok(result.hints.fix?.includes('setup'), `hint should mention setup, got: ${result.hints.fix}`);
+    assert.ok(result.hints.learnMore, 'learnMore hint should be present');
   });
 
   // --- Execution flow ---
@@ -347,8 +378,8 @@ describe('handleExecTool', () => {
     assert.ok(result.error?.includes('Not authenticated'), `got: ${result.error}`);
   });
 
-  it('successful exec with module returns result, logs, and filesSync', async () => {
-    sinon.stub(globalThis, 'fetch').resolves(
+  it('successful exec with module returns result, logs, and filesSync (web-app fallback path)', async () => {
+    stubFetchScriptsRun404ThenWebApp(
       makeFetchResponse({
         status: 200,
         json: { success: true, result: 'ok', logger_output: 'log' },
@@ -367,7 +398,7 @@ describe('handleExecTool', () => {
   });
 
   it('exec failure from GAS surfaces error and invocation hint', async () => {
-    sinon.stub(globalThis, 'fetch').resolves(
+    stubFetchScriptsRun404ThenWebApp(
       makeFetchResponse({
         status: 200,
         json: { success: false, error: 'ReferenceError: myFn is not defined' },
@@ -385,7 +416,7 @@ describe('handleExecTool', () => {
   });
 
   it('HTML error response triggers browser authorization hint', async () => {
-    sinon.stub(globalThis, 'fetch').resolves(
+    stubFetchScriptsRun404ThenWebApp(
       makeFetchResponse({
         status: 403,
         text: '<!DOCTYPE html><html><body>Sign in</body></html>',
@@ -409,7 +440,7 @@ describe('handleExecTool', () => {
   });
 
   it('browser auth error includes browserAuth automation hint with chrome-devtools steps', async () => {
-    sinon.stub(globalThis, 'fetch').resolves(
+    stubFetchScriptsRun404ThenWebApp(
       makeFetchResponse({
         status: 403,
         text: '<!DOCTYPE html><html><body>Sign in</body></html>',
@@ -431,7 +462,7 @@ describe('handleExecTool', () => {
   });
 
   it('HTML 200 response (new project browser auth) triggers authorization hint', async () => {
-    sinon.stub(globalThis, 'fetch').resolves(
+    stubFetchScriptsRun404ThenWebApp(
       makeFetchResponse({
         status: 200,
         text: '<!DOCTYPE html><html><body>Authorize access</body></html>',
@@ -453,11 +484,11 @@ describe('handleExecTool', () => {
 
   // --- Redirect & URL handling ---
 
-  it('workspace domain URL is normalized before first fetch', async () => {
+  it('workspace domain URL is normalized before web-app fetch', async () => {
     const workspaceUrl = 'https://script.google.com/a/macros/example.com/s/ABC/exec';
     await writeDeployConfig(tmpDir, { [VALID_SCRIPT_ID]: { headUrl: workspaceUrl } });
 
-    const fetchStub = sinon.stub(globalThis, 'fetch').resolves(
+    const fetchStub = stubFetchScriptsRun404ThenWebApp(
       makeFetchResponse({ status: 200, json: { success: true, result: null } }),
     );
 
@@ -467,7 +498,10 @@ describe('handleExecTool', () => {
     );
 
     assert.ok(fetchStub.called, 'fetch should have been called');
-    const firstUrl: string = fetchStub.firstCall.args[0] as string;
+    // Find the web-app call (not the scripts.run call)
+    const webAppCall = fetchStub.getCalls().find(c => !String(c.args[0]).includes(':run'));
+    assert.ok(webAppCall, 'web-app call should have been made');
+    const firstUrl: string = webAppCall!.args[0] as string;
     assert.ok(
       !firstUrl.includes('/a/macros/'),
       `URL should not contain workspace domain prefix, got: ${firstUrl}`,
@@ -486,42 +520,51 @@ describe('handleExecTool', () => {
     );
   });
 
-  it('redirect to google.com is followed (2 fetch calls, final success)', async () => {
+  it('redirect to google.com is followed (scripts.run 404, then web-app 302, then success)', async () => {
     const fetchStub = sinon.stub(globalThis, 'fetch');
-    fetchStub.onFirstCall().resolves(
-      makeFetchResponse({
-        status: 302,
-        location: 'https://accounts.google.com/o/oauth2/auth?continue=...',
-      }),
-    );
-    fetchStub.onSecondCall().resolves(
-      makeFetchResponse({ status: 200, json: { success: true, result: null } }),
-    );
+    fetchStub.callsFake(async (url: string | URL | Request) => {
+      const urlStr = String(url);
+      if (urlStr.includes(':run')) {
+        return makeScriptsRun404();
+      }
+      // First web-app call: redirect
+      if (fetchStub.callCount === 2) {
+        return makeFetchResponse({
+          status: 302,
+          location: 'https://accounts.google.com/o/oauth2/auth?continue=...',
+        });
+      }
+      // Second web-app call: success
+      return makeFetchResponse({ status: 200, json: { success: true, result: null } });
+    });
 
     const result = await handleExecTool(
       { scriptId: VALID_SCRIPT_ID, function: 'myFn', localDir: tmpDir },
       makeFileOps(), makeSession(), makeDeployOps(),
     );
 
-    assert.equal(fetchStub.callCount, 2, 'should follow the redirect and make 2 fetch calls');
+    assert.equal(fetchStub.callCount, 3, 'should have made 3 fetch calls (scripts.run, web-app, redirect follow)');
     assert.equal(result.success, true);
   });
 
-  it('redirect to non-google.com is not followed (1 fetch call, result from 302)', async () => {
-    const fetchStub = sinon.stub(globalThis, 'fetch').resolves(
-      makeFetchResponse({
+  it('redirect to non-google.com is not followed', async () => {
+    const fetchStub = sinon.stub(globalThis, 'fetch');
+    fetchStub.callsFake(async (url: string | URL | Request) => {
+      if (String(url).includes(':run')) return makeScriptsRun404();
+      return makeFetchResponse({
         status: 302,
         text: '',
         location: 'https://evil.com/steal',
-      }),
-    );
+      });
+    });
 
     const result = await handleExecTool(
       { scriptId: VALID_SCRIPT_ID, function: 'myFn', localDir: tmpDir },
       makeFileOps(), makeSession(), makeDeployOps(),
     );
 
-    assert.equal(fetchStub.callCount, 1, 'should not follow non-google.com redirect');
+    // 2 calls: scripts.run (404) + web-app (302 to non-google = not followed)
+    assert.equal(fetchStub.callCount, 2, 'should not follow non-google.com redirect');
     assert.equal(result.success, false);
   });
 
@@ -534,9 +577,11 @@ describe('handleExecTool', () => {
       'utf-8'
     );
 
-    const fetchStub = sinon.stub(global, 'fetch').resolves(
-      makeFetchResponse({ json: { success: true, result: 42, logger_output: '' } }),
-    );
+    // Stub fetch: scripts.run 404, web-app success
+    const fetchStub = sinon.stub(globalThis, 'fetch').callsFake(async (url: string | URL | Request) => {
+      if (String(url).includes(':run')) return makeScriptsRun404();
+      return makeFetchResponse({ json: { success: true, result: 42, logger_output: '' } });
+    });
 
     const result = await handleExecTool(
       { function: 'myFn', localDir: tmpDir },
@@ -561,9 +606,9 @@ describe('handleExecTool', () => {
     assert.ok(result.error?.includes('No scriptId provided'), `got: ${result.error}`);
   });
 
-  // --- scripts.run path (gcpSwitched) ---
+  // --- scripts.run path ---
 
-  describe('scripts.run mode (gcpSwitched)', () => {
+  describe('scripts.run mode', () => {
     let originalFetch: typeof globalThis.fetch;
 
     beforeEach(() => {
@@ -574,7 +619,7 @@ describe('handleExecTool', () => {
       globalThis.fetch = originalFetch;
     });
 
-    it('uses scripts.run when gcpSwitched is true', async () => {
+    it('scripts.run succeeds on already-gcpSwitched project — no extra setDeploymentInfo', async () => {
       await writeDeployConfig(tmpDir, {
         [VALID_SCRIPT_ID]: { gcpSwitched: true } as Record<string, unknown>,
       } as Record<string, unknown>);
@@ -582,10 +627,7 @@ describe('handleExecTool', () => {
       let capturedUrl = '';
       globalThis.fetch = (async (url: string | URL | Request) => {
         capturedUrl = url as string;
-        return new Response(JSON.stringify({
-          done: true,
-          response: { result: { success: true, result: 42 } },
-        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+        return makeScriptsRunSuccess(42);
       }) as typeof globalThis.fetch;
 
       const result = await handleExecTool(
@@ -597,20 +639,144 @@ describe('handleExecTool', () => {
       assert.equal(result.result, 42);
       assert.ok(capturedUrl.includes('scripts.run') || capturedUrl.includes(':run'));
       assert.ok(result.hints.execMode?.includes('scripts.run'));
+
+      // gcpSwitched was already true — verify file not modified (still true, no spurious write)
+      const { readDeployConfig } = await import('../../src/config/deployConfig.js');
+      const config = await readDeployConfig(tmpDir);
+      assert.equal((config[VALID_SCRIPT_ID] as Record<string, unknown>)?.gcpSwitched, true);
     });
 
-    it('skips deployment URL check when gcpSwitched', async () => {
-      // No deployment URLs in config — should NOT fail
+    it('scripts.run succeeds on non-gcpSwitched project → gcpSwitched persisted', async () => {
+      // Config has headUrl but no gcpSwitched
+      await writeDeployConfig(tmpDir, {
+        [VALID_SCRIPT_ID]: { headUrl: HEAD_URL } as Record<string, unknown>,
+      } as Record<string, unknown>);
+
+      globalThis.fetch = (async () => makeScriptsRunSuccess('ok')) as typeof globalThis.fetch;
+
+      const result = await handleExecTool(
+        { scriptId: VALID_SCRIPT_ID, localDir: tmpDir, js_statement: 'return "ok"' },
+        makeFileOps(), makeSession(), makeDeployOps(),
+      );
+
+      assert.equal(result.success, true, `expected success, got: ${result.error}`);
+      assert.equal(result.result, 'ok');
+      assert.ok(result.hints.execMode?.includes('scripts.run'), `execMode hint: ${result.hints.execMode}`);
+
+      // gcpSwitched should now be persisted in gas-deploy.json
+      const { readDeployConfig } = await import('../../src/config/deployConfig.js');
+      const config = await readDeployConfig(tmpDir);
+      assert.equal(
+        (config[VALID_SCRIPT_ID] as Record<string, unknown>)?.gcpSwitched,
+        true,
+        'gcpSwitched should be persisted after scripts.run success',
+      );
+    });
+
+    it('scripts.run succeeds on non-gcpSwitched project with no spreadsheetId → gcpSwitched persisted', async () => {
+      // No spreadsheetId in config
+      await writeDeployConfig(tmpDir, {
+        [VALID_SCRIPT_ID]: { headUrl: HEAD_URL } as Record<string, unknown>,
+      } as Record<string, unknown>);
+
+      let capturedBody = '';
+      globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+        capturedBody = init?.body as string;
+        return makeScriptsRunSuccess(null);
+      }) as typeof globalThis.fetch;
+
+      const result = await handleExecTool(
+        { scriptId: VALID_SCRIPT_ID, localDir: tmpDir, js_statement: 'return null' },
+        makeFileOps(), makeSession(), makeDeployOps(),
+      );
+
+      assert.equal(result.success, true, `expected success, got: ${result.error}`);
+
+      // spreadsheetId should NOT be in the request body (undefined → omitted)
+      const body = JSON.parse(capturedBody);
+      assert.equal(body.parameters[0].spreadsheetId, undefined, 'spreadsheetId should be omitted when not in config');
+
+      // gcpSwitched should be persisted
+      const { readDeployConfig } = await import('../../src/config/deployConfig.js');
+      const config = await readDeployConfig(tmpDir);
+      assert.equal((config[VALID_SCRIPT_ID] as Record<string, unknown>)?.gcpSwitched, true);
+    });
+
+    it('scripts.run returns 404 AND headUrl present → falls through to web-app', async () => {
+      // Config has headUrl but no gcpSwitched
+      await writeDeployConfig(tmpDir, {
+        [VALID_SCRIPT_ID]: { headUrl: HEAD_URL } as Record<string, unknown>,
+      } as Record<string, unknown>);
+
+      let callCount = 0;
+      globalThis.fetch = (async (url: string | URL | Request) => {
+        callCount++;
+        if (String(url).includes(':run')) return makeScriptsRun404();
+        return new Response(JSON.stringify({ success: true, result: 'web-app-result' }), {
+          status: 200, headers: { 'Content-Type': 'application/json' },
+        });
+      }) as typeof globalThis.fetch;
+
+      const result = await handleExecTool(
+        { scriptId: VALID_SCRIPT_ID, localDir: tmpDir, js_statement: 'return "web-app-result"' },
+        makeFileOps(), makeSession(), makeDeployOps(),
+      );
+
+      assert.equal(result.success, true, `expected success via web-app fallback, got: ${result.error}`);
+      assert.equal(result.result, 'web-app-result');
+      assert.equal(callCount, 2, 'should have made 2 calls: scripts.run (404) + web-app');
+    });
+
+    it('scripts.run returns 404 AND no headUrl → returns setup hint', async () => {
+      // Config has no headUrl, no gcpSwitched
+      await writeDeployConfig(tmpDir, {
+        [VALID_SCRIPT_ID]: {} as Record<string, unknown>,
+      } as Record<string, unknown>);
+
+      globalThis.fetch = (async () => makeScriptsRun404()) as typeof globalThis.fetch;
+
+      const result = await handleExecTool(
+        { scriptId: VALID_SCRIPT_ID, localDir: tmpDir, js_statement: 'return 1' },
+        makeFileOps(), makeSession(), makeDeployOps(),
+      );
+
+      assert.equal(result.success, false);
+      assert.ok(result.error?.includes('404') || result.error?.includes('not linked'), `got: ${result.error}`);
+      assert.ok(result.hints.fix?.includes('setup'), `fix hint should mention setup, got: ${result.hints.fix}`);
+      assert.ok(result.hints.learnMore, 'learnMore hint should be present');
+      assert.ok(!result.hints.browserAuth, 'should not emit browserAuth for 404+no-headUrl path');
+    });
+
+    it('scripts.run returns non-404 auth error → returns contextual auth hint', async () => {
+      await writeDeployConfig(tmpDir, {
+        [VALID_SCRIPT_ID]: { headUrl: HEAD_URL } as Record<string, unknown>,
+      } as Record<string, unknown>);
+
+      // 403 from scripts.run (auth error, not 404)
+      globalThis.fetch = (async () => {
+        return new Response('Forbidden', { status: 403 });
+      }) as typeof globalThis.fetch;
+
+      const result = await handleExecTool(
+        { scriptId: VALID_SCRIPT_ID, localDir: tmpDir, js_statement: 'return 1' },
+        makeFileOps(), makeSession(), makeDeployOps(),
+      );
+
+      assert.equal(result.success, false);
+      assert.ok(result.hints.execMode?.includes('scripts.run'), `execMode should indicate scripts.run path, got: ${result.hints.execMode}`);
+      assert.ok(
+        result.hints.fix?.includes('auth') || result.hints.fix?.includes('login') || result.hints.fix?.includes('scope'),
+        `fix hint should mention auth/login/scope, got: ${result.hints.fix}`,
+      );
+    });
+
+    it('skips deployment URL pre-check — no error when no URL and gcpSwitched', async () => {
+      // No deployment URLs in config — should NOT fail with "No deployment URL found"
       await writeDeployConfig(tmpDir, {
         [VALID_SCRIPT_ID]: { gcpSwitched: true } as Record<string, unknown>,
       } as Record<string, unknown>);
 
-      globalThis.fetch = (async () => {
-        return new Response(JSON.stringify({
-          done: true,
-          response: { result: { success: true, result: 'ok' } },
-        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
-      }) as typeof globalThis.fetch;
+      globalThis.fetch = (async () => makeScriptsRunSuccess('ok')) as typeof globalThis.fetch;
 
       const result = await handleExecTool(
         { scriptId: VALID_SCRIPT_ID, localDir: tmpDir, js_statement: 'return "ok"' },
@@ -628,10 +794,7 @@ describe('handleExecTool', () => {
       let capturedBody = '';
       globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
         capturedBody = init?.body as string;
-        return new Response(JSON.stringify({
-          done: true,
-          response: { result: { success: true, result: null } },
-        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+        return makeScriptsRunSuccess(null);
       }) as typeof globalThis.fetch;
 
       await handleExecTool(
@@ -643,14 +806,13 @@ describe('handleExecTool', () => {
       assert.equal(body.parameters[0].spreadsheetId, 'sheet123');
     });
 
-    it('returns scripts.run error with hints', async () => {
+    it('returns 404 setup hint for gcpSwitched project where scripts.run returns 404', async () => {
+      // gcpSwitched=true but scripts.run returns 404 (e.g., EXECUTION_API disabled)
       await writeDeployConfig(tmpDir, {
         [VALID_SCRIPT_ID]: { gcpSwitched: true } as Record<string, unknown>,
       } as Record<string, unknown>);
 
-      globalThis.fetch = (async () => {
-        return new Response('Not Found', { status: 404 });
-      }) as typeof globalThis.fetch;
+      globalThis.fetch = (async () => makeScriptsRun404()) as typeof globalThis.fetch;
 
       const result = await handleExecTool(
         { scriptId: VALID_SCRIPT_ID, localDir: tmpDir, js_statement: 'return 1' },
@@ -658,11 +820,11 @@ describe('handleExecTool', () => {
       );
 
       assert.equal(result.success, false);
-      assert.ok(result.error?.includes('404'));
-      assert.ok(result.hints.execMode?.includes('scripts.run'));
+      assert.ok(result.error?.includes('404') || result.error?.includes('not linked'), `got: ${result.error}`);
+      assert.ok(result.hints.fix?.includes('setup'), `hint should mention setup, got: ${result.hints.fix}`);
     });
 
-    it('does not emit browserAuth hint for gcpSwitched projects', async () => {
+    it('does not emit browserAuth hint when scripts.run fails with non-404 error', async () => {
       await writeDeployConfig(tmpDir, {
         [VALID_SCRIPT_ID]: { gcpSwitched: true } as Record<string, unknown>,
       } as Record<string, unknown>);
@@ -680,20 +842,15 @@ describe('handleExecTool', () => {
       );
 
       assert.equal(result.success, false);
-      assert.ok(!result.hints.browserAuth, 'should not emit browserAuth for gcpSwitched');
+      assert.ok(!result.hints.browserAuth, 'should not emit browserAuth for scripts.run failures');
     });
 
-    it('returns returnPrefix warning for scripts.run mode too', async () => {
+    it('returns returnPrefix warning for scripts.run success path', async () => {
       await writeDeployConfig(tmpDir, {
         [VALID_SCRIPT_ID]: { gcpSwitched: true } as Record<string, unknown>,
       } as Record<string, unknown>);
 
-      globalThis.fetch = (async () => {
-        return new Response(JSON.stringify({
-          done: true,
-          response: { result: { success: true, result: undefined } },
-        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
-      }) as typeof globalThis.fetch;
+      globalThis.fetch = (async () => makeScriptsRunSuccess(undefined)) as typeof globalThis.fetch;
 
       const result = await handleExecTool(
         { scriptId: VALID_SCRIPT_ID, localDir: tmpDir, js_statement: '2+2' },
@@ -705,3 +862,4 @@ describe('handleExecTool', () => {
     });
   });
 });
+
