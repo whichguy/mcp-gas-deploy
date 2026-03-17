@@ -129,10 +129,12 @@ export async function syncProperties(
   }
   return keys.length;
 })()`;
-        await execInternal(targetScriptId, deleteJs, sessionManager, {
+        const deleteResult = await execInternal(targetScriptId, deleteJs, sessionManager, {
           headUrl: options?.targetHeadUrl,
         });
-        deleted = toDelete;
+        if (deleteResult.success) {
+          deleted = toDelete;
+        }
       }
     }
   }

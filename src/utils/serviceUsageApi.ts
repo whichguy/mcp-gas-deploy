@@ -70,7 +70,9 @@ export async function enableAppsScriptApi(
 
     // 200 OK — check if it was already enabled or just enabled now
     const data = await response.json().catch(() => ({})) as Record<string, unknown>;
-    const alreadyEnabled = typeof data.name === 'string' && data.name.includes('ENABLED');
+    // Service Usage API returns an Operation object for :enable.
+    // 'done: true' on immediate return = already enabled. 'done: false' = async enable in progress.
+    const alreadyEnabled = data.done === true;
 
     return { success: true, alreadyEnabled };
   } catch (error: unknown) {

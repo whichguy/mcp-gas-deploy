@@ -43,16 +43,16 @@ export function stripMcpEnvironments(files: GASFile[]): GASFile[] {
  */
 export function enforceDeployFileOrder(files: GASFile[]): GASFile[] {
   const criticalFiles = DEPLOY_CRITICAL_ORDER.map(baseName => {
-    const file = files.find(f => f.name === baseName || f.name.endsWith(`/${baseName.split('/').pop()!}`));
-    // Match by exact name or by the final path component (e.g. "require" matches "common-js/require")
+    // Match by exact name first, then by final path component (e.g. "require" matches "common-js/require")
     const exactFile = files.find(f => f.name === baseName);
-    if (!exactFile) {
+    const suffixFile = exactFile ?? files.find(f => f.name.endsWith(`/${baseName.split('/').pop()!}`));
+    if (!suffixFile) {
       throw new Error(
         `[enforceDeployFileOrder] Required file "${baseName}" is missing from source project. ` +
         `Cannot deploy without the CommonJS module system.`
       );
     }
-    return exactFile;
+    return suffixFile;
   });
 
   const criticalActualNames = new Set(criticalFiles.map(f => f.name));

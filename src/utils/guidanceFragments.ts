@@ -101,10 +101,10 @@ export class GuidanceFragments {
   ].join('\n');
 
   static readonly propertiesCopyWorkflow = [
-    'Script properties are NOT copied automatically. To copy them:',
-    '1. exec in SOURCE project: require("runner-api").getScriptProperties() — returns all key/value pairs.',
-    '2. exec in DESTINATION project: require("runner-api").setScriptProperties({...props}) — sets them.',
-    'This requires a runner-api module with getScriptProperties/setScriptProperties exports.',
-    'Alternative: manually set properties via PropertiesService in a custom function.',
+    'Script properties are synced automatically during promote (syncProperties: true by default).',
+    'Property sync uses execHelper (scripts.run or web-app fallback) to read from source and write to target.',
+    'Infrastructure keys (URLs, script IDs, deployment IDs) are excluded from sync.',
+    'To sync manually: use promote({syncProperties: true}) or call execInternal with PropertiesService code.',
+    'reconcileProperties: true deletes target-only keys not present in source (opt-in, default false).',
   ].join('\n');
 }
