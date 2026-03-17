@@ -111,4 +111,48 @@ export class GASProjectOperations {
       await driveApi.files.delete({ fileId: scriptId });
     });
   }
+
+  /**
+   * Create a new Google Spreadsheet via Drive API.
+   * Uses the existing drive scope — no new OAuth scope needed.
+   * Returns the spreadsheetId (= Drive fileId).
+   */
+  async createSpreadsheet(title: string): Promise<string> {
+    return this.authOps.makeDriveRequest(async (driveApi) => {
+      console.error(`createSpreadsheet: creating "${title}"`);
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const response = await (driveApi.files as any).create({
+        requestBody: {
+          name: title,
+          mimeType: 'application/vnd.google-apps.spreadsheet',
+        },
+        fields: 'id',
+      });
+
+      const spreadsheetId = response.data.id as string | undefined;
+      if (!spreadsheetId) {
+        throw new Error('createSpreadsheet: Drive API response missing file id');
+      }
+
+      console.error(`createSpreadsheet: created ${spreadsheetId} ("${title}")`);
+      return spreadsheetId;
+    });
+  }
+
+  /**
+   * Get the parent spreadsheet ID for a container-bound script.
+   * Returns null for standalone scripts or if the project cannot be found.
+   */
+  async getProjectParentId(scriptId: string): Promise<string | null> {
+    try {
+      return await this.authOps.makeAuthenticatedRequest(async (scriptApi) => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const response = await (scriptApi.projects as any).get({ scriptId });
+        return (response.data.parentId as string) ?? null;
+      });
+    } catch {
+      return null;
+    }
+  }
 }

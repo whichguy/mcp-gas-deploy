@@ -34,6 +34,20 @@ export interface DeploymentInfo {
   gcpSwitched?: boolean;              // true when GCP project switch succeeded — exec uses scripts.run
   spreadsheetId?: string;             // bound spreadsheet ID for context passing (optional)
 
+  // Library-based promote model (file-push between -source libraries)
+  // lib prefix prevents collision with existing versioned-deploy fields
+  libUserSymbol?: string;                // Library namespace (e.g. "SheetsChat")
+  libStagingSourceScriptId?: string;     // Standalone -source library for staging
+  libStagingConsumerScriptId?: string;   // Container-bound consumer in staging spreadsheet
+  libStagingSpreadsheetId?: string;      // Staging consumer spreadsheet
+  libStagingPromotedAt?: string;         // ISO timestamp of last staging promote
+  libProdSourceScriptId?: string;        // Standalone -source library for prod
+  libProdConsumerScriptId?: string;      // Container-bound consumer in prod spreadsheet
+  libProdSpreadsheetId?: string;         // Prod consumer spreadsheet
+  libProdPromotedAt?: string;            // ISO timestamp of last prod promote
+  libTemplateScriptId?: string;          // Container-bound script wired during setup
+  libConfigManagerSyncFailed?: boolean;  // true if ConfigManager sync failed on last promote
+
   // Circular buffer slots (auto-managed — never set manually)
   // Staging slots: up to 4 source deployment slot IDs (0-indexed, fills in order: 0→1→2→3→cycle)
   stagingSlotIds?: string[];                        // source deployment slot IDs (slots 1–4, 0-indexed)
