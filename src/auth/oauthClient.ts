@@ -258,6 +258,177 @@ export class OAuthClient {
     });
   }
 
+  // Bootstrap flow — token delivered via GAS web app POST (no oauth2Client exchange)
+  async startBootstrapFlow(tokenBrokerUrl: string): Promise<OAuthFlowResult> {
+    if (this.server) {
+      return { success: false, error: 'Auth flow already in progress' };
+    }
+
+    try {
+      const nonce = crypto.randomBytes(16).toString('hex');
+
+      // Find free port starting at 3456 — loop startCallbackServerOnPort, increment on EADDRINUSE
+      let port = 3456;
+      while (true) {
+        try {
+          await this.startCallbackServerOnPort(port);
+          break;
+        } catch (err: unknown) {
+          if ((err as NodeJS.ErrnoException).code === 'EADDRINUSE') {
+            this.cleanupServer();
+            port++;
+            continue;
+          }
+          throw err;
+        }
+      }
+
+      const brokerUrl = `${tokenBrokerUrl}?port=${port}&nonce=${nonce}`;
+      console.error(`Bootstrap: local server on port ${port}, opening token broker`);
+
+      try {
+        const { default: open } = await import('open');
+        await open(brokerUrl);
+        console.error('Browser launched for bootstrap auth');
+      } catch {
+        console.error('Could not open browser automatically. Please visit:', brokerUrl);
+      }
+
+      const result = await this.waitForBootstrapToken(nonce, 120000);
+      return result;
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { success: false, error: `Bootstrap flow failed: ${message}` };
+    } finally {
+      this.cleanupServer();
+    }
+  }
+
+  /** Wait up to timeoutMs for POST /token with valid nonce */
+  private waitForBootstrapToken(expectedNonce: string, timeoutMs: number): Promise<OAuthFlowResult> {
+    return new Promise((resolve) => {
+      let resolved = false;
+
+      const timeout = setTimeout(() => {
+        if (!resolved) {
+          resolved = true;
+          resolve({
+            success: false,
+            error: 'Bootstrap auth timed out (120s). Re-run auth({action:"bootstrap"}) to try again.',
+          });
+        }
+      }, timeoutMs);
+
+      this.server!.on('request', (req, res) => {
+        // CORS preflight — required for Private Network Access (HTTPS→localhost)
+        if (req.method === 'OPTIONS') {
+          res.writeHead(204, {
+            'Access-Control-Allow-Origin': 'https://script.google.com',
+            'Access-Control-Allow-Methods': 'POST, OPTIONS',
+            'Access-Control-Allow-Headers': 'Content-Type',
+            'Access-Control-Allow-Private-Network': 'true',
+          });
+          res.end();
+          return;
+        }
+
+        if (req.method !== 'POST' || req.url !== '/token') {
+          res.writeHead(404).end('Not found');
+          return;
+        }
+
+        if (resolved) {
+          res.writeHead(200).end();
+          return;
+        }
+
+        // Read request body — cap at 64 KB to prevent memory exhaustion
+        const MAX_BODY = 65536;
+        let bodySize = 0;
+        const chunks: Buffer[] = [];
+        req.on('data', (chunk: Buffer) => {
+          bodySize += chunk.length;
+          if (bodySize > MAX_BODY) {
+            res.writeHead(413, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Payload too large' }));
+            req.destroy();
+            return;
+          }
+          chunks.push(chunk);
+        });
+        req.on('end', () => {
+          void (async () => {
+            try {
+              const body = JSON.parse(Buffer.concat(chunks).toString('utf-8')) as {
+                token?: string;
+                nonce?: string;
+              };
+
+              // Nonce validation — rejects CSRF attempts
+              if (body.nonce !== expectedNonce) {
+                res.writeHead(403, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Invalid nonce' }));
+                return;
+              }
+
+              if (!body.token || typeof body.token !== 'string') {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Missing or invalid token' }));
+                return;
+              }
+
+              // Fetch userinfo via direct GET — bootstrap receives a raw token, not from oauth2Client.getToken()
+              const userInfoRes = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
+                headers: { Authorization: `Bearer ${body.token}` },
+              });
+
+              if (!userInfoRes.ok) {
+                const text = await userInfoRes.text();
+                throw new Error(`userinfo fetch failed: ${userInfoRes.status} ${text}`);
+              }
+
+              const user = (await userInfoRes.json()) as UserInfo;
+
+              const tokenInfo: TokenInfo = {
+                access_token: body.token,
+                expires_at: Date.now() + 55 * 60 * 1000,
+                scope: GAS_SCOPES.join(' '),
+                token_type: 'Bearer',
+              };
+
+              await this.sessionManager.setAuthSession(tokenInfo, user);
+
+              resolved = true;
+              clearTimeout(timeout);
+              res.writeHead(200, {
+                'Content-Type': 'application/json',
+                'Access-Control-Allow-Origin': 'https://script.google.com',
+              });
+              res.end(JSON.stringify({ success: true }));
+              resolve({ success: true, user });
+            } catch (err: unknown) {
+              if (!resolved) {
+                resolved = true;
+                clearTimeout(timeout);
+                const message = err instanceof Error ? err.message : String(err);
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: message }));
+                resolve({ success: false, error: `Bootstrap token delivery failed: ${message}` });
+              }
+            }
+          })();
+        });
+        req.on('error', (err: Error) => {
+          if (!resolved) {
+            resolved = true;
+            clearTimeout(timeout);
+            resolve({ success: false, error: `Request error: ${err.message}` });
+          }
+        });
+      });
+    });
+  }
+
   private cleanupServer(): void {
     if (this.server) {
       try { this.server.close(); } catch { /* ignore */ }

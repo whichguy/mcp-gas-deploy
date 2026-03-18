@@ -18,15 +18,18 @@ import { executeViaScriptsRun } from '../utils/scriptsRunExecutor.js';
 import { ensureExecutionApi, parseManifest } from '../utils/manifestUtils.js';
 import { enableAppsScriptApi } from '../utils/serviceUsageApi.js';
 import { loadOAuthConfig } from '../auth/oauthClient.js';
+import { saveBootstrapConfig } from '../auth/bootstrapConfig.js';
 import { SchemaFragments } from '../utils/schemaFragments.js';
 import { GuidanceFragments } from '../utils/guidanceFragments.js';
 import type { GASFileOperations } from '../api/gasFileOperations.js';
+import type { GASProjectOperations } from '../api/gasProjectOperations.js';
+import type { GASDeployOperations } from '../api/gasDeployOperations.js';
 import type { SessionManager } from '../auth/sessionManager.js';
 import { getAuthHint } from '../utils/authHints.js';
 
 const GCP_PROJECT_NUMBER_RE = /^\d{6,20}$/;
 
-export type SetupOperation = 'init' | 'script' | 'status';
+export type SetupOperation = 'init' | 'script' | 'status' | 'deploy-token-broker';
 
 export interface SetupToolParams {
   operation?: SetupOperation;
@@ -53,6 +56,7 @@ export interface SetupToolResult {
   scriptsRunVerified?: boolean;
   apiEnabled?: boolean | 'warning';
   apiEnabledHint?: string;
+  execUrl?: string;
   error?: string;
   hints: Record<string, string>;
 }
@@ -74,8 +78,8 @@ export const SETUP_TOOL_DEFINITION = {
       ...SchemaFragments.localDir,
       operation: {
         type: 'string' as const,
-        enum: ['init', 'script', 'status'] as const,
-        description: 'Operation: init (GCP project setup), script (per-script readiness), status (check state). Auto-detected if omitted.',
+        enum: ['init', 'script', 'status', 'deploy-token-broker'] as const,
+        description: 'Operation: init (GCP project setup), script (per-script readiness), status (check state), deploy-token-broker (deploy GAS token broker for restricted-domain auth). Auto-detected if omitted.',
       },
       gcpProjectNumber: {
         type: 'string' as const,
@@ -104,6 +108,8 @@ export async function handleSetupTool(
   params: SetupToolParams,
   fileOps: GASFileOperations,
   sessionManager: SessionManager,
+  projectOps?: GASProjectOperations,
+  deployOps?: GASDeployOperations,
   chromeDevtools?: ChromeDevtools
 ): Promise<SetupToolResult> {
   // Resolve localDir for config lookups (may not have scriptId)
@@ -138,6 +144,8 @@ export async function handleSetupTool(
       return handleSetupScript(params, localDir, fileOps, sessionManager, chromeDevtools);
     case 'status':
       return handleSetupStatus(params, localDir, fileOps, sessionManager);
+    case 'deploy-token-broker':
+      return handleSetupDeployTokenBroker(fileOps, sessionManager, projectOps, deployOps);
     default:
       return {
         success: false,
@@ -146,7 +154,7 @@ export async function handleSetupTool(
         token: { present: false },
         gcpProjectNumber: { present: false },
         error: `Unknown operation: ${operation as string}`,
-        hints: { fix: 'Use operation="init", "script", or "status".' },
+        hints: { fix: 'Use operation="init", "script", "status", or "deploy-token-broker".' },
       };
   }
 }
@@ -588,4 +596,204 @@ async function handleSetupStatus(
     scriptsRunVerified,
     hints,
   };
+}
+
+// ── Embedded token broker file contents ─────────────────────────────────────
+// Inlined so deploy-token-broker works for npm package installs without the
+// gas-token-broker/ source directory present on disk.
+
+const BROKER_APPSSCRIPT_JSON = JSON.stringify({
+  timeZone: 'America/New_York',
+  oauthScopes: [
+    'https://www.googleapis.com/auth/script.projects',
+    'https://www.googleapis.com/auth/script.deployments',
+    'https://www.googleapis.com/auth/script.webapp.deploy',
+    'https://www.googleapis.com/auth/script.scriptapp',
+    'https://www.googleapis.com/auth/script.external_request',
+    'https://www.googleapis.com/auth/drive',
+    'https://www.googleapis.com/auth/userinfo.email',
+    'https://www.googleapis.com/auth/userinfo.profile',
+  ],
+  webapp: {
+    executeAs: 'USER_ACCESSING',
+    access: 'ANYONE',
+  },
+}, null, 2);
+
+const BROKER_CODE_GS = `/**
+ * MCP Token Broker — doGet handler
+ * Validates port + nonce, embeds token in Index template.
+ */
+function doGet(e) {
+  var portStr = e.parameter.port;
+  var nonce = e.parameter.nonce;
+  var port = parseInt(portStr, 10);
+  if (isNaN(port) || port < 1024 || port > 65535) {
+    return HtmlService.createHtmlOutput('<html><body><h1>Setup Error</h1><p>Invalid port parameter.</p></body></html>');
+  }
+  if (!nonce || !/^[0-9a-f]{32}$/.test(nonce)) {
+    return HtmlService.createHtmlOutput('<html><body><h1>Setup Error</h1><p>Invalid nonce parameter.</p></body></html>');
+  }
+  var token = ScriptApp.getOAuthToken();
+  var template = HtmlService.createTemplateFromFile('Index');
+  template.port = port;
+  template.nonce = nonce;
+  template.token = token;
+  return template.evaluate().setTitle('MCP Auth Setup').setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+}`;
+
+const BROKER_INDEX_HTML = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>MCP Auth Setup</title>
+  <style>
+    body { font-family: sans-serif; max-width: 600px; margin: 40px auto; padding: 0 20px; color: #333; }
+    #loading p { color: #555; }
+    #success p { color: #2a7a2a; font-size: 1.1em; }
+    #fallback { display: none; }
+    label { display: block; margin-top: 16px; font-weight: bold; }
+    textarea { width: 100%; height: 80px; font-family: monospace; font-size: 11px; margin-top: 4px; box-sizing: border-box; }
+    pre { background: #f4f4f4; padding: 12px; overflow-x: auto; font-size: 12px; border-radius: 4px; white-space: pre-wrap; word-break: break-all; }
+    .note { font-size: 0.875em; color: #666; margin-top: 16px; }
+    code { background: #eee; padding: 2px 4px; border-radius: 2px; font-size: 0.9em; }
+  </style>
+</head>
+<body>
+  <div id="loading"><p>Completing setup&#8230;</p></div>
+  <div id="success" style="display:none"><p>Setup complete. You can close this tab.</p></div>
+  <div id="fallback" style="display:none">
+    <h2>Manual Token Delivery</h2>
+    <p>The local server could not be reached automatically. Use one of these methods:</p>
+    <label for="token-field">Access token</label>
+    <textarea id="token-field" aria-label="Access token" readonly></textarea>
+    <p>Or run this command in your terminal:</p>
+    <pre id="curl-cmd"></pre>
+    <p class="note">If the server timed out (&gt;120s), re-run <code>auth({action:'bootstrap'})</code> in Claude Code and return to this page &mdash; your token is still valid for ~1 hour.</p>
+  </div>
+  <script>
+    var PORT = <?!= port ?>;
+    var NONCE = <?!= JSON.stringify(nonce) ?>;
+    var TOKEN = <?!= JSON.stringify(token) ?>;
+    document.getElementById('token-field').value = TOKEN;
+    var escapedToken = TOKEN.replace(/\\\\/g, '\\\\\\\\').replace(/"/g, '\\\\"');
+    document.getElementById('curl-cmd').textContent =
+      'curl -s -X POST http://localhost:' + PORT + '/token \\\\\\n' +
+      '  -H "Content-Type: application/json" \\\\\\n' +
+      '  -d \\'{\"token\":\"' + escapedToken + '\",\"nonce\":\"' + NONCE + '\"}\\'' ;
+    window.onload = function () {
+      fetch('http://localhost:' + PORT + '/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: TOKEN, nonce: NONCE })
+      }).then(function (res) {
+        if (res.ok) {
+          document.getElementById('loading').style.display = 'none';
+          document.getElementById('success').style.display = 'block';
+        } else { showFallback(); }
+      }).catch(function () { showFallback(); });
+    };
+    function showFallback() {
+      document.getElementById('loading').style.display = 'none';
+      document.getElementById('fallback').style.display = 'block';
+    }
+  </script>
+</body>
+</html>`;
+
+async function handleSetupDeployTokenBroker(
+  fileOps: GASFileOperations,
+  sessionManager: SessionManager,
+  projectOps?: GASProjectOperations,
+  deployOps?: GASDeployOperations
+): Promise<SetupToolResult> {
+  if (!projectOps || !deployOps) {
+    return {
+      success: false,
+      operation: 'deploy-token-broker',
+      oauthConfig: { present: false },
+      token: { present: false },
+      gcpProjectNumber: { present: false },
+      error: 'Internal error: projectOps/deployOps not available.',
+      hints: { fix: 'Ensure the MCP server is up to date.' },
+    };
+  }
+
+  const token = await sessionManager.getValidToken();
+  if (!token) {
+    const hint = await getAuthHint(sessionManager);
+    return {
+      success: false,
+      operation: 'deploy-token-broker',
+      oauthConfig: { present: false },
+      token: { present: false, hint },
+      gcpProjectNumber: { present: false },
+      error: hint,
+      hints: { auth: hint },
+    };
+  }
+
+  try {
+    // 1. Create standalone GAS project
+    const { scriptId } = await projectOps.createProject('mcp-token-broker');
+
+    // 2. Push broker files (appsscript.json + Code.gs + Index.html)
+    await fileOps.updateProjectFiles(scriptId, [
+      { name: 'appsscript', type: 'JSON', source: BROKER_APPSSCRIPT_JSON },
+      { name: 'Code', type: 'SERVER_JS', source: BROKER_CODE_GS },
+      { name: 'Index', type: 'HTML', source: BROKER_INDEX_HTML },
+    ]);
+
+    // 3. Create version snapshot (required before creating a versioned deployment)
+    const version = await deployOps.createVersion(scriptId, 'MCP Token Broker v1');
+
+    // 4. Create versioned deployment (web app exec URL)
+    const deployment = await deployOps.createDeployment(
+      scriptId,
+      version.versionNumber,
+      'MCP Token Broker v1'
+    );
+
+    const execUrl = deployment.webAppUrl;
+    if (!execUrl) {
+      return {
+        success: false,
+        operation: 'deploy-token-broker',
+        oauthConfig: { present: true },
+        token: { present: true },
+        gcpProjectNumber: { present: false },
+        error: 'Deployment succeeded but no exec URL returned. Deploy manually via script.google.com.',
+        hints: {
+          manual: `Open https://script.google.com/home/projects/${scriptId} → Deploy → New deployment → Web app (Execute as: User accessing, Access: Anyone).`,
+        },
+      };
+    }
+
+    // 5. Save exec URL to bootstrap-config.json
+    await saveBootstrapConfig(process.cwd(), execUrl);
+
+    return {
+      success: true,
+      operation: 'deploy-token-broker',
+      oauthConfig: { present: true },
+      token: { present: true },
+      gcpProjectNumber: { present: false },
+      execUrl,
+      hints: {
+        next: 'Run auth({action:"bootstrap"}) to authenticate via the token broker.',
+        url: execUrl,
+      },
+    };
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      success: false,
+      operation: 'deploy-token-broker',
+      oauthConfig: { present: true },
+      token: { present: true },
+      gcpProjectNumber: { present: false },
+      error: `deploy-token-broker failed: ${message}`,
+      hints: { fix: 'Retry setup({operation:"deploy-token-broker"}) after re-authenticating.' },
+    };
+  }
 }

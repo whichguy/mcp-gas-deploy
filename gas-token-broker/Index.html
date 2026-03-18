@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>MCP Auth Setup</title>
+  <style>
+    body { font-family: sans-serif; max-width: 600px; margin: 40px auto; padding: 0 20px; color: #333; }
+    h2 { margin-top: 0; }
+    #loading p { color: #555; }
+    #success p { color: #2a7a2a; font-size: 1.1em; }
+    #fallback { display: none; }
+    label { display: block; margin-top: 16px; font-weight: bold; }
+    textarea { width: 100%; height: 80px; font-family: monospace; font-size: 11px; margin-top: 4px; box-sizing: border-box; }
+    pre { background: #f4f4f4; padding: 12px; overflow-x: auto; font-size: 12px; border-radius: 4px; white-space: pre-wrap; word-break: break-all; }
+    .note { font-size: 0.875em; color: #666; margin-top: 16px; }
+    code { background: #eee; padding: 2px 4px; border-radius: 2px; font-size: 0.9em; }
+  </style>
+</head>
+<body>
+  <div id="loading"><p>Completing setup&#8230;</p></div>
+  <div id="success" style="display:none"><p>Setup complete. You can close this tab.</p></div>
+  <div id="fallback" style="display:none">
+    <h2>Manual Token Delivery</h2>
+    <p>The local server could not be reached automatically. Use one of these methods:</p>
+    <label for="token-field">Access token</label>
+    <textarea id="token-field" aria-label="Access token" readonly></textarea>
+    <p>Or run this command in your terminal:</p>
+    <pre id="curl-cmd"></pre>
+    <p class="note">
+      If the server timed out (&gt;120s), re-run <code>auth({action:'bootstrap'})</code> in Claude Code
+      and return to this page &mdash; your token is still valid for ~1 hour.
+    </p>
+  </div>
+
+  <script>
+    var PORT = <?!= port ?>;
+    var NONCE = <?!= JSON.stringify(nonce) ?>;
+    var TOKEN = <?!= JSON.stringify(token) ?>;
+
+    // Pre-fill fallback UI
+    document.getElementById('token-field').value = TOKEN;
+    var escapedToken = TOKEN.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    document.getElementById('curl-cmd').textContent =
+      'curl -s -X POST http://localhost:' + PORT + '/token \\\n' +
+      '  -H "Content-Type: application/json" \\\n' +
+      '  -d \'{"token":"' + escapedToken + '","nonce":"' + NONCE + '"}\'';
+
+    window.onload = function () {
+      fetch('http://localhost:' + PORT + '/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: TOKEN, nonce: NONCE })
+      })
+        .then(function (res) {
+          if (res.ok) {
+            document.getElementById('loading').style.display = 'none';
+            document.getElementById('success').style.display = 'block';
+          } else {
+            showFallback();
+          }
+        })
+        .catch(function () {
+          showFallback();
+        });
+    };
+
+    function showFallback() {
+      document.getElementById('loading').style.display = 'none';
+      document.getElementById('fallback').style.display = 'block';
+    }
+  </script>
+</body>
+</html>

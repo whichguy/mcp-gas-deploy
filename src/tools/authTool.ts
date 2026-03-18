@@ -7,9 +7,11 @@
 import { OAuthClient, loadOAuthConfig } from '../auth/oauthClient.js';
 import { SessionManager } from '../auth/sessionManager.js';
 import { GuidanceFragments } from '../utils/guidanceFragments.js';
+import { loadBootstrapConfig, saveBootstrapConfig } from '../auth/bootstrapConfig.js';
 
 export interface AuthToolParams {
-  action: 'login' | 'logout' | 'status';
+  action: 'login' | 'logout' | 'status' | 'bootstrap';
+  tokenBrokerUrl?: string;
 }
 
 export interface AuthToolResult {
@@ -42,8 +44,12 @@ export const AUTH_TOOL_DEFINITION = {
     properties: {
       action: {
         type: 'string',
-        enum: ['login', 'logout', 'status'],
+        enum: ['login', 'logout', 'status', 'bootstrap'],
         description: 'Authentication action to perform',
+      },
+      tokenBrokerUrl: {
+        type: 'string',
+        description: 'Token broker web app exec URL (https://script.google.com/macros/s/{id}/exec). Required on first bootstrap call; saved to .mcp-gas/bootstrap-config.json for subsequent calls.',
       },
     },
     required: ['action'],
@@ -83,7 +89,7 @@ export async function handleAuthTool(
   oauthClient: OAuthClient,
   sessionManager: SessionManager
 ): Promise<AuthToolResult> {
-  const { action } = params;
+  const { action, tokenBrokerUrl } = params;
 
   switch (action) {
     case 'login': {
@@ -129,6 +135,46 @@ export async function handleAuthTool(
       };
     }
 
+    case 'bootstrap': {
+      if (tokenBrokerUrl) {
+        await saveBootstrapConfig(process.cwd(), tokenBrokerUrl);
+      }
+      const brokerUrl = tokenBrokerUrl ?? (await loadBootstrapConfig())?.tokenBrokerUrl;
+      if (!brokerUrl) {
+        return {
+          success: false,
+          action: 'bootstrap',
+          message: 'No token broker URL found.',
+          error: 'No token broker URL configured.',
+          hints: {
+            fix: 'Deploy the token broker first: setup({operation: "deploy-token-broker"}). Then re-run auth({action: "bootstrap", tokenBrokerUrl: "<exec-url>"}).',
+          },
+        };
+      }
+
+      const bootstrapResult = await oauthClient.startBootstrapFlow(brokerUrl);
+      if (bootstrapResult.success && bootstrapResult.user) {
+        return {
+          success: true,
+          action: 'bootstrap',
+          message: `Authenticated as ${bootstrapResult.user.email} via token broker`,
+          user: { email: bootstrapResult.user.email, name: bootstrapResult.user.name },
+          hints: {
+            next: 'You are now authenticated. Token expires in ~55 minutes. Run auth({action:"bootstrap"}) to re-authenticate when expired.',
+          },
+        };
+      }
+      return {
+        success: false,
+        action: 'bootstrap',
+        message: 'Bootstrap authentication failed',
+        error: bootstrapResult.error,
+        hints: {
+          fix: 'Re-run auth({action:"bootstrap"}) to try again. If the issue persists, re-run setup({operation:"deploy-token-broker"}) to redeploy the broker.',
+        },
+      };
+    }
+
     case 'status': {
       const status = await sessionManager.getAuthStatus();
 
@@ -154,18 +200,28 @@ export async function handleAuthTool(
         ? `Token expires in ${Math.floor(status.expiresIn / 60)} minutes`
         : 'Token status unknown';
 
+      if (!status.tokenValid) {
+        const bootstrapConfig = await loadBootstrapConfig();
+        const expiredHint = bootstrapConfig
+          ? 'Token expired. Run auth({action: "bootstrap"}) to re-authenticate via token broker.'
+          : 'Run auth with action="login" to refresh your session.';
+        return {
+          success: true,
+          action: 'status',
+          message: 'Session exists but token is expired. Re-authentication required.',
+          user: status.user ? { email: status.user.email, name: status.user.name } : undefined,
+          hints: { fix: expiredHint, ...setupHints },
+        };
+      }
+
       return {
         success: true,
         action: 'status',
-        message: status.tokenValid
-          ? `Authenticated as ${status.user?.email}. ${expiresMsg}.`
-          : `Session exists but token is expired. Re-login required.`,
+        message: `Authenticated as ${status.user?.email}. ${expiresMsg}.`,
         user: status.user
           ? { email: status.user.email, name: status.user.name }
           : undefined,
-        hints: status.tokenValid
-          ? { next: 'Token is valid. Deploy tools are available.' }
-          : { fix: 'Run auth with action="login" to refresh your session.', ...setupHints },
+        hints: { next: 'Token is valid. Deploy tools are available.' },
       };
     }
   }
