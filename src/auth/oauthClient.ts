@@ -251,6 +251,7 @@ export class OAuthClient {
  */
 export async function loadOAuthConfig(): Promise<AuthConfig | null> {
   const configPaths = [
+    path.join(process.cwd(), '.mcp-gas', 'oauth-config.json'),
     path.join(process.cwd(), 'oauth-config.json'),
     path.join(os.homedir(), '.config', 'mcp-gas', 'oauth-config.json'),
   ];
