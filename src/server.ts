@@ -27,6 +27,7 @@ import { handleTriggerTool, TRIGGER_TOOL_DEFINITION } from './tools/triggerTool.
 import { handleCreateTool, CREATE_TOOL_DEFINITION } from './tools/createTool.js';
 import { handleForkTool, FORK_TOOL_DEFINITION } from './tools/forkTool.js';
 import { handleSetupTool, SETUP_TOOL_DEFINITION } from './tools/setupTool.js';
+import { createCdpClient } from './utils/chromeCdpClient.js';
 import { handlePromoteTool, PROMOTE_TOOL_DEFINITION } from './tools/promoteTool.js';
 import { GASDeployOperations } from './api/gasDeployOperations.js';
 import { GASProjectOperations } from './api/gasProjectOperations.js';
@@ -150,10 +151,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'fork': {
+        const cdpClient = await createCdpClient();
         const result = await handleForkTool(
           args as unknown as Parameters<typeof handleForkTool>[0],
           projectOps,
           fileOps,
+          cdpClient ?? undefined,
         );
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       }
