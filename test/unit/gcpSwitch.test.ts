@@ -31,7 +31,7 @@ describe('switchGcpProject', () => {
     assert.ok(result.error?.includes('required'));
   });
 
-  it('returns error when XSRF token extraction fails', async () => {
+  it('returns error when XSRF token extraction fails (sign-in error)', async () => {
     const devtools = makeDevtools({
       evaluate_script: async () => ({
         result: JSON.stringify({ error: 'XSRF token not found — not signed in to Google in this browser' }),
@@ -39,8 +39,49 @@ describe('switchGcpProject', () => {
     });
     const result = await switchGcpProject(SCRIPT_ID, GCP_NUMBER, devtools);
     assert.equal(result.success, false);
-    assert.ok(result.error?.includes('Token extraction failed'));
+    assert.ok(result.error?.includes('accounts.google.com'));
     assert.ok(result.hint?.includes('sign in'));
+  });
+
+  it('navigates Chrome to accounts.google.com when XSRF token is missing', async () => {
+    const navigatedUrls: string[] = [];
+    const devtools = makeDevtools({
+      navigate_page: async (args) => { navigatedUrls.push(args.url); return {}; },
+      evaluate_script: async () => ({
+        result: JSON.stringify({ error: 'XSRF token not found — not signed in to Google in this browser' }),
+      }),
+    });
+    const result = await switchGcpProject(SCRIPT_ID, GCP_NUMBER, devtools);
+    assert.ok(navigatedUrls.includes('https://accounts.google.com'));
+    assert.ok(result.error?.includes('Chrome has been navigated to accounts.google.com'));
+  });
+
+  it('navigate_page error does not shadow original sign-in error (non-fatal path)', async () => {
+    let navigateCallCount = 0;
+    const devtools = makeDevtools({
+      navigate_page: async (args) => {
+        navigateCallCount++;
+        if (navigateCallCount > 1) throw new Error('navigate failed');
+        return {};
+      },
+      evaluate_script: async () => ({
+        result: JSON.stringify({ error: 'XSRF token not found — not signed in to Google in this browser' }),
+      }),
+    });
+    const result = await switchGcpProject(SCRIPT_ID, GCP_NUMBER, devtools);
+    assert.equal(result.success, false);
+    assert.ok(result.error?.includes('accounts.google.com'));
+  });
+
+  it('returns Token extraction failed for non-sign-in XSRF errors', async () => {
+    const devtools = makeDevtools({
+      evaluate_script: async () => ({
+        result: JSON.stringify({ error: 'some unexpected JS exception' }),
+      }),
+    });
+    const result = await switchGcpProject(SCRIPT_ID, GCP_NUMBER, devtools);
+    assert.equal(result.success, false);
+    assert.ok(result.error?.includes('Token extraction failed'));
   });
 
   it('returns success when batchexecute returns [1]', async () => {
