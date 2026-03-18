@@ -69,11 +69,25 @@ export async function switchGcpProject(
     const tokenData = JSON.parse(tokenResult.result ?? '{}');
 
     if (tokenData.error) {
+      const isSignInError = String(tokenData.error).includes('not signed in');
+      if (isSignInError) {
+        // Navigate Chrome to Google sign-in so the user can authenticate and retry
+        try {
+          await chromeDevtools.navigate_page({ url: 'https://accounts.google.com' });
+          console.error('[mcp-gas-deploy] GCP switch: Chrome is not signed in to Google.');
+          console.error('[mcp-gas-deploy] Chrome has been navigated to accounts.google.com.');
+          console.error('[mcp-gas-deploy] Sign in to Google in the Chrome window, then retry fork.');
+        } catch { /* non-fatal — original error still returned */ }
+      }
       return {
         ...base,
         success: false,
-        error: `Token extraction failed: ${tokenData.error}`,
-        hint: 'Open Chrome, sign in to Google, then retry fork.',
+        error: isSignInError
+          ? 'Not signed in to Google in this browser. Chrome has been navigated to accounts.google.com — sign in, then retry fork.'
+          : `Token extraction failed: ${tokenData.error}`,
+        hint: isSignInError
+          ? 'Chrome has been navigated to accounts.google.com — sign in, then retry fork.'
+          : 'Open Chrome, sign in to Google, then retry fork.',
       };
     }
 

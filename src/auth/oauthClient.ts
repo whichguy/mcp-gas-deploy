@@ -74,8 +74,20 @@ export class OAuthClient {
       this.codeVerifier = pkce.codeVerifier;
       this.state = crypto.randomUUID();
 
-      const port = await this.startCallbackServer();
-      const redirectUri = `http://127.0.0.1:${port}/callback`;
+      // Use the first registered redirect_uri from config (must match GCP Console registration).
+      // Parse its port so the local server binds to the same port.
+      const registeredUri = this.config.redirect_uris?.[0];
+      let port: number;
+      let redirectUri: string;
+      if (registeredUri) {
+        const parsed = new URL(registeredUri);
+        port = parsed.port ? parseInt(parsed.port, 10) : 80;
+        redirectUri = registeredUri;
+      } else {
+        port = await this.startCallbackServer();
+        redirectUri = `http://127.0.0.1:${port}/callback`;
+      }
+      await this.startCallbackServerOnPort(port);
 
       const authUrl = this.oauth2Client.generateAuthUrl({
         access_type: 'offline',
@@ -111,7 +123,7 @@ export class OAuthClient {
     }
   }
 
-  /** Start local HTTP server for OAuth callback */
+  /** Start local HTTP server for OAuth callback on a random port */
   private startCallbackServer(): Promise<number> {
     return new Promise((resolve, reject) => {
       this.server = http.createServer();
@@ -123,6 +135,15 @@ export class OAuthClient {
           reject(new Error('Failed to get server port'));
         }
       });
+      this.server.on('error', reject);
+    });
+  }
+
+  /** Start local HTTP server on a specific port (to match registered redirect_uri) */
+  private startCallbackServerOnPort(port: number): Promise<void> {
+    return new Promise((resolve, reject) => {
+      this.server = http.createServer();
+      this.server.listen(port, '127.0.0.1', () => resolve());
       this.server.on('error', reject);
     });
   }

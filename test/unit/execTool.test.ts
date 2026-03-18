@@ -735,9 +735,10 @@ describe('handleExecTool', () => {
 
       globalThis.fetch = (async () => makeScriptsRun404()) as typeof globalThis.fetch;
 
+      // No GCP link: getOrCreateHeadDeployment returns no webAppUrl (models unlinked project)
       const result = await handleExecTool(
         { scriptId: VALID_SCRIPT_ID, localDir: tmpDir, js_statement: 'return 1' },
-        makeFileOps(), makeSession(), makeDeployOps(),
+        makeFileOps(), makeSession(), makeDeployOps(''),
       );
 
       assert.equal(result.success, false);
@@ -814,9 +815,10 @@ describe('handleExecTool', () => {
 
       globalThis.fetch = (async () => makeScriptsRun404()) as typeof globalThis.fetch;
 
+      // No webAppUrl returned from HEAD deployment (models EXECUTION_API disabled scenario)
       const result = await handleExecTool(
         { scriptId: VALID_SCRIPT_ID, localDir: tmpDir, js_statement: 'return 1' },
-        makeFileOps(), makeSession(), makeDeployOps(),
+        makeFileOps(), makeSession(), makeDeployOps(''),
       );
 
       assert.equal(result.success, false);

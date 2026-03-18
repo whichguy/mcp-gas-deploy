@@ -218,15 +218,21 @@ export async function handleForkTool(
 
   // Step 7: Switch GCP project (if chrome-devtools available and gcpProjectNumber known)
   let execMode: 'scripts-run' | 'web-app-fallback' = 'web-app-fallback';
+  let gcpSwitchFailed = false;
+  let gcpSwitchError: string | undefined;
   if (chromeDevtools && gcpProjectNumber) {
     try {
       const switchResult = await switchGcpProject(forkScriptId, gcpProjectNumber, chromeDevtools);
       if (switchResult.success) {
         execMode = 'scripts-run';
+      } else {
+        gcpSwitchFailed = true;
+        gcpSwitchError = switchResult.error;
       }
       // GCP switch failure is non-fatal — fork still works via web app
-    } catch {
-      // Non-fatal
+    } catch (e: unknown) {
+      gcpSwitchFailed = true;
+      gcpSwitchError = e instanceof Error ? e.message : String(e);
     }
   }
 
@@ -262,14 +268,22 @@ export async function handleForkTool(
     // Non-fatal
   }
 
+  const CHROME_LAUNCH_CMD = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome --remote-debugging-port=9222 --user-data-dir=~/.cache/chrome-devtools-mcp/chrome-profile';
   const hints: Record<string, string> = {
     next: execMode === 'scripts-run'
       ? `Fork ready with scripts.run (no browser auth needed). Run exec({scriptId: "${forkScriptId}"}) to execute.`
-      : `Fork ready in web-app-fallback mode. Deploy and authorize in browser before exec. To enable scripts.run: provide gcpProjectNumber and ensure chrome-devtools MCP is running.`,
+      : `Fork ready in web-app-fallback mode. Deploy and authorize in browser before exec. To enable scripts.run, complete GCP switch setup and retry fork.`,
   };
 
-  if (execMode === 'web-app-fallback' && !gcpProjectNumber) {
-    hints.gcpProjectNumber = 'Set gcpProjectNumber in gas-deploy.json or pass it explicitly. Find your Standard GCP project number at console.cloud.google.com > project settings.';
+  if (execMode === 'web-app-fallback') {
+    if (!gcpProjectNumber) {
+      hints.gcpProjectNumber = 'Set gcpProjectNumber in gas-deploy.json or pass it explicitly. Find your Standard GCP project number at console.cloud.google.com > project settings.';
+    }
+    if (!chromeDevtools) {
+      hints.gcpSwitch = `To enable scripts.run (no browser auth needed), set up Chrome remote debugging: (1) Add chrome-devtools MCP to Claude Code settings — mcpServers: { "chrome-devtools": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-chrome-devtools"] } }. (2) Launch Chrome with debug port: ${CHROME_LAUNCH_CMD} (3) In that Chrome window, sign in to Google (accounts.google.com). (4) Restart Claude Code or run /mcp to reconnect, then retry fork.`;
+    } else if (gcpSwitchFailed) {
+      hints.gcpSwitch = `GCP switch failed: ${gcpSwitchError ?? 'unknown error'}. Ensure Chrome (port 9222) is signed in to the correct Google account at accounts.google.com, then retry fork.`;
+    }
   }
 
   return {
