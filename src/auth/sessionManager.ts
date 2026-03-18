@@ -9,10 +9,9 @@
 import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import os from 'node:os';
 import { OAuth2Client } from 'google-auth-library';
 
-const TOKEN_CACHE_DIR = path.join(os.homedir(), '.auth', 'mcp-gas', 'tokens');
+const TOKEN_CACHE_DIR = path.join(process.cwd(), '.mcp-gas', 'tokens');
 
 export interface TokenInfo {
   access_token: string;
