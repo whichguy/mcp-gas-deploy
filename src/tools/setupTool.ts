@@ -789,7 +789,7 @@ async function handleSetupDeployTokenBroker(
     return {
       success: false,
       operation: 'deploy-token-broker',
-      oauthConfig: { present: false },
+      oauthConfig: { present: true },
       token: { present: true },
       gcpProjectNumber: { present: false },
       error: `deploy-token-broker failed: ${message}`,

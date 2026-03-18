@@ -342,9 +342,20 @@ export class OAuthClient {
           return;
         }
 
-        // Read request body
+        // Read request body — cap at 64 KB to prevent memory exhaustion
+        const MAX_BODY = 65536;
+        let bodySize = 0;
         const chunks: Buffer[] = [];
-        req.on('data', (chunk: Buffer) => chunks.push(chunk));
+        req.on('data', (chunk: Buffer) => {
+          bodySize += chunk.length;
+          if (bodySize > MAX_BODY) {
+            res.writeHead(413, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Payload too large' }));
+            req.destroy();
+            return;
+          }
+          chunks.push(chunk);
+        });
         req.on('end', () => {
           void (async () => {
             try {
@@ -360,9 +371,9 @@ export class OAuthClient {
                 return;
               }
 
-              if (!body.token) {
+              if (!body.token || typeof body.token !== 'string') {
                 res.writeHead(400, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: 'Missing token' }));
+                res.end(JSON.stringify({ error: 'Missing or invalid token' }));
                 return;
               }
 
