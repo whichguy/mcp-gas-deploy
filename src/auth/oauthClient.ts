@@ -349,14 +349,17 @@ export class OAuthClient {
         req.on('data', (chunk: Buffer) => {
           bodySize += chunk.length;
           if (bodySize > MAX_BODY) {
-            res.writeHead(413, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'Payload too large' }));
+            if (!res.headersSent) {
+              res.writeHead(413, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: 'Payload too large' }));
+            }
             req.destroy();
             return;
           }
           chunks.push(chunk);
         });
         req.on('end', () => {
+          if (req.destroyed) return;
           void (async () => {
             try {
               const body = JSON.parse(Buffer.concat(chunks).toString('utf-8')) as {

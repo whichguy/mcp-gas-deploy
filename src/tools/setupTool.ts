@@ -639,7 +639,7 @@ function doGet(e) {
   template.port = port;
   template.nonce = nonce;
   template.token = token;
-  return template.evaluate().setTitle('MCP Auth Setup').setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+  return template.evaluate().setTitle('MCP Auth Setup');
 }`;
 
 const BROKER_INDEX_HTML = `<!DOCTYPE html>
@@ -675,9 +675,8 @@ const BROKER_INDEX_HTML = `<!DOCTYPE html>
     var PORT = <?!= port ?>;
     var NONCE = <?!= JSON.stringify(nonce) ?>;
     var TOKEN = <?!= JSON.stringify(token) ?>;
-    document.getElementById('token-field').value = TOKEN;
     var escapedToken = TOKEN.replace(/\\\\/g, '\\\\\\\\').replace(/"/g, '\\\\"');
-    document.getElementById('curl-cmd').textContent =
+    var curlCmd =
       'curl -s -X POST http://localhost:' + PORT + '/token \\\\\\n' +
       '  -H "Content-Type: application/json" \\\\\\n' +
       '  -d \\'{\"token\":\"' + escapedToken + '\",\"nonce\":\"' + NONCE + '\"}\\'' ;
@@ -695,6 +694,8 @@ const BROKER_INDEX_HTML = `<!DOCTYPE html>
     };
     function showFallback() {
       document.getElementById('loading').style.display = 'none';
+      document.getElementById('token-field').value = TOKEN;
+      document.getElementById('curl-cmd').textContent = curlCmd;
       document.getElementById('fallback').style.display = 'block';
     }
   </script>
