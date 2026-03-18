@@ -372,7 +372,46 @@ export async function handleExecTool(
       }
     }
 
-    // No web-app URL — return setup hint
+    // No cached headUrl — attempt to create/fetch HEAD deployment as fallback
+    try {
+      const headDeployment = await deployOps.getOrCreateHeadDeployment(scriptId);
+      const resolvedHeadUrl = headDeployment.webAppUrl;
+      if (resolvedHeadUrl) {
+        // Cache for future calls
+        try { await setDeploymentInfo(resolvedDir, scriptId, { headUrl: resolvedHeadUrl }); } catch { /* non-fatal */ }
+
+        const rawResult = await executeRawJs(jsStatement, resolvedHeadUrl, token);
+        if (!rawResult.success) {
+          const isBrowserAuth = rawResult.error?.includes('browser authorization');
+          return {
+            success: false, filesSync,
+            error: rawResult.error,
+            hints: {
+              fix: isBrowserAuth
+                ? 'Open the deployment URL in a browser signed in as the script owner, then retry exec'
+                : 'Check the function and module names.',
+              ...(isBrowserAuth ? {
+                browserAuth: [
+                  `Automate browser auth with chrome-devtools MCP:`,
+                  `1. mcp__chrome-devtools__navigate_page url="${resolvedHeadUrl}" — opens the auth page`,
+                  `2. mcp__chrome-devtools__click element="Allow"`,
+                  `3. Retry exec`,
+                ].join('\n'),
+              } : {}),
+            },
+          };
+        }
+        return {
+          success: true,
+          result: rawResult.result,
+          logs: rawResult.logs,
+          filesSync,
+          hints: { execMode: 'web-app-fallback', next: `${filesSync} files pushed. Executed via web-app fallback (HEAD deployment).` },
+        };
+      }
+    } catch { /* fall through to setup hint */ }
+
+    // No web-app URL available — return setup hint
     return {
       success: false,
       filesSync,
