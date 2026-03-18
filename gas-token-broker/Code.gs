@@ -44,6 +44,5 @@ function doGet(e) {
   template.token = token;
 
   return template.evaluate()
-    .setTitle('MCP Auth Setup')
-    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+    .setTitle('MCP Auth Setup');
 }

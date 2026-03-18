@@ -37,10 +37,8 @@
     var NONCE = <?!= JSON.stringify(nonce) ?>;
     var TOKEN = <?!= JSON.stringify(token) ?>;
 
-    // Pre-fill fallback UI
-    document.getElementById('token-field').value = TOKEN;
     var escapedToken = TOKEN.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-    document.getElementById('curl-cmd').textContent =
+    var curlCmd =
       'curl -s -X POST http://localhost:' + PORT + '/token \\\n' +
       '  -H "Content-Type: application/json" \\\n' +
       '  -d \'{"token":"' + escapedToken + '","nonce":"' + NONCE + '"}\'';
@@ -66,6 +64,8 @@
 
     function showFallback() {
       document.getElementById('loading').style.display = 'none';
+      document.getElementById('token-field').value = TOKEN;
+      document.getElementById('curl-cmd').textContent = curlCmd;
       document.getElementById('fallback').style.display = 'block';
     }
   </script>
