@@ -11,7 +11,7 @@ import {
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import { SessionManager } from './auth/sessionManager.js';
-import { OAuthClient, loadOAuthConfig } from './auth/oauthClient.js';
+import { OAuthClient, loadOAuthConfig, type AuthConfig } from './auth/oauthClient.js';
 import { GASAuthOperations } from './api/gasAuthOperations.js';
 import { GASFileOperations } from './api/gasFileOperations.js';
 import { handleAuthTool, AUTH_TOOL_DEFINITION } from './tools/authTool.js';
@@ -75,21 +75,31 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   try {
     switch (name) {
       case 'auth': {
-        const config = await loadOAuthConfig();
-        if (!config) {
-          return {
-            content: [{
-              type: 'text',
-              text: JSON.stringify({
-                success: false,
-                error: 'OAuth config not found. Place oauth-config.json in the working directory or ~/.config/mcp-gas/',
-              }),
-            }],
-            isError: true,
-          };
+        const authAction = (args as { action?: string })?.action;
+        let oauthClient: OAuthClient;
+
+        // Bootstrap doesn't require oauth-config — the GAS web app provides the token directly
+        if (authAction === 'bootstrap') {
+          const dummyConfig: AuthConfig = { client_id: '', redirect_uris: [], scopes: [] };
+          oauthClient = new OAuthClient(dummyConfig, sessionManager);
+        } else {
+          const config = await loadOAuthConfig();
+          if (!config) {
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify({
+                  success: false,
+                  error: 'OAuth config not found. Place oauth-config.json in the working directory or ~/.config/mcp-gas/',
+                }),
+              }],
+              isError: true,
+            };
+          }
+          oauthClient = new OAuthClient(config, sessionManager);
         }
-        const oauthClient = new OAuthClient(config, sessionManager);
-        const result = await handleAuthTool(args as { action: 'login' | 'logout' | 'status' }, oauthClient, sessionManager);
+
+        const result = await handleAuthTool(args as unknown as Parameters<typeof handleAuthTool>[0], oauthClient, sessionManager);
         return {
           content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
         };
@@ -166,6 +176,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           args as unknown as Parameters<typeof handleSetupTool>[0],
           fileOps,
           sessionManager,
+          projectOps,
+          deployOps,
         );
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       }
