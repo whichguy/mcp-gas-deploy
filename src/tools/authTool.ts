@@ -4,7 +4,7 @@
  * Handles login, logout, and status actions for Google OAuth.
  */
 
-import { OAuthClient } from '../auth/oauthClient.js';
+import { OAuthClient, loadOAuthConfig } from '../auth/oauthClient.js';
 import { SessionManager } from '../auth/sessionManager.js';
 import { GuidanceFragments } from '../utils/guidanceFragments.js';
 
@@ -51,7 +51,7 @@ export const AUTH_TOOL_DEFINITION = {
     llmGuidance: {
       workflow: 'Check status first. Login only if not authenticated or token expired. Logout only when switching accounts.',
       scopeErrors: 'If a tool returns a scope error, re-login to refresh OAuth scopes. Tokens auto-refresh otherwise.',
-      tokenPersistence: 'Tokens are cached to disk (~/.config/mcp-gas/). They survive restarts and auto-refresh.',
+      tokenPersistence: 'Tokens are cached to disk (.mcp-gas/tokens/ in the project directory). They survive restarts and auto-refresh.',
       errorRecovery: GuidanceFragments.errorRecovery,
     },
   },
@@ -105,14 +105,16 @@ export async function handleAuthTool(
         };
       }
 
+      const loginOauthConfig = await loadOAuthConfig();
       return {
         success: false,
         action: 'login',
         message: 'Authentication failed',
         error: result.error,
         hints: {
-          fix: 'Ensure oauth-config.json is present in the working directory or ~/.config/mcp-gas/',
+          fix: 'Ensure oauth-config.json is present in .mcp-gas/ in your project directory.',
           scope: 'Check that the OAuth client has the required scopes enabled.',
+          ...(!loginOauthConfig ? { oauthConfig: 'No oauth-config.json found — download from GCP Console > APIs & Services > Credentials > your Desktop App client.' } : {}),
         },
       };
     }
@@ -130,12 +132,21 @@ export async function handleAuthTool(
     case 'status': {
       const status = await sessionManager.getAuthStatus();
 
+      const statusOauthConfig = await loadOAuthConfig();
+      const setupHints: Record<string, string> = {};
+      if (!statusOauthConfig) {
+        setupHints.oauthConfig = 'No oauth-config.json found in .mcp-gas/ — run setup({operation: "init"}) first.';
+      }
+
       if (!status.authenticated) {
         return {
           success: true,
           action: 'status',
           message: 'Not authenticated',
-          hints: { next: 'Run auth with action="login" to authenticate.' },
+          hints: {
+            next: 'Run auth with action="login" to authenticate.',
+            ...setupHints,
+          },
         };
       }
 
@@ -154,7 +165,7 @@ export async function handleAuthTool(
           : undefined,
         hints: status.tokenValid
           ? { next: 'Token is valid. Deploy tools are available.' }
-          : { fix: 'Run auth with action="login" to refresh your session.' },
+          : { fix: 'Run auth with action="login" to refresh your session.', ...setupHints },
       };
     }
   }

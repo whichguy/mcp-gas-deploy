@@ -1,11 +1,12 @@
 /**
- * Unit tests for getAuthHint — contextual auth-failure hint builder.
+ * Unit tests for getAuthHint and getAuthHintWithSetup — contextual auth-failure hint builders.
  */
 
 import { describe, it, afterEach } from 'mocha';
 import { strict as assert } from 'node:assert';
 import sinon from 'sinon';
-import { getAuthHint } from '../../src/utils/authHints.js';
+import { getAuthHint, getAuthHintWithSetup } from '../../src/utils/authHints.js';
+import type { AuthConfig } from '../../src/auth/oauthClient.js';
 import type { SessionManager } from '../../src/auth/sessionManager.js';
 
 function makeSessionManager(): SessionManager {
@@ -58,5 +59,45 @@ describe('getAuthHint', () => {
     });
     const result = await getAuthHint(sm);
     assert.equal(result, 'Token expired. Run auth action="login" to re-authenticate.');
+  });
+});
+
+const FAKE_CONFIG: AuthConfig = {
+  client_id: 'id',
+  client_secret: 'secret',
+  redirect_uris: ['http://127.0.0.1'],
+  scopes: [],
+};
+
+describe('getAuthHintWithSetup', () => {
+  afterEach(() => {
+    sinon.restore();
+  });
+
+  it('includes oauthConfig hint when config loader returns null', async () => {
+    const sm = makeSessionManager();
+    const { authHint, setupHints } = await getAuthHintWithSetup(sm, undefined, async () => null);
+    assert.equal(authHint, 'Not authenticated. Run auth action="login" first.');
+    assert.ok('oauthConfig' in setupHints, 'setupHints.oauthConfig should be present');
+    assert.match(setupHints.oauthConfig, /setup/);
+  });
+
+  it('omits oauthConfig hint when config loader returns a config', async () => {
+    const sm = makeSessionManager();
+    const { setupHints } = await getAuthHintWithSetup(sm, undefined, async () => FAKE_CONFIG);
+    assert.ok(!('oauthConfig' in setupHints), 'setupHints.oauthConfig should be absent');
+  });
+
+  it('includes gcpProjectNumber hint when localDir provided and no gcpProjectNumber in gas-deploy.json', async () => {
+    const sm = makeSessionManager();
+    // /tmp has no gas-deploy.json → getRootConfig returns {} → no gcpProjectNumber
+    const { setupHints } = await getAuthHintWithSetup(sm, '/tmp', async () => null);
+    assert.ok('gcpProjectNumber' in setupHints, 'setupHints.gcpProjectNumber should be present');
+  });
+
+  it('omits gcpProjectNumber hint when localDir is not provided', async () => {
+    const sm = makeSessionManager();
+    const { setupHints } = await getAuthHintWithSetup(sm, undefined, async () => null);
+    assert.ok(!('gcpProjectNumber' in setupHints), 'setupHints.gcpProjectNumber should be absent when no localDir');
   });
 });
