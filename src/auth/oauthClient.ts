@@ -81,13 +81,19 @@ export class OAuthClient {
       let redirectUri: string;
       if (registeredUri) {
         const parsed = new URL(registeredUri);
-        port = parsed.port ? parseInt(parsed.port, 10) : 80;
+        if (!parsed.port) {
+          throw new Error(
+            `redirect_uris[0] has no port: "${registeredUri}". ` +
+            'OAuth for installed apps requires an explicit port (e.g. http://127.0.0.1:3456/callback).'
+          );
+        }
+        port = parseInt(parsed.port, 10);
         redirectUri = registeredUri;
+        await this.startCallbackServerOnPort(port);
       } else {
         port = await this.startCallbackServer();
         redirectUri = `http://127.0.0.1:${port}/callback`;
       }
-      await this.startCallbackServerOnPort(port);
 
       const authUrl = this.oauth2Client.generateAuthUrl({
         access_type: 'offline',
@@ -345,6 +351,7 @@ export class OAuthClient {
         // Read request body — cap at 64 KB to prevent memory exhaustion
         const MAX_BODY = 65536;
         let bodySize = 0;
+        let bodyRejected = false;
         const chunks: Buffer[] = [];
         req.on('data', (chunk: Buffer) => {
           bodySize += chunk.length;
@@ -353,6 +360,7 @@ export class OAuthClient {
               res.writeHead(413, { 'Content-Type': 'application/json' });
               res.end(JSON.stringify({ error: 'Payload too large' }));
             }
+            bodyRejected = true;
             req.destroy();
             return;
           }
@@ -422,6 +430,7 @@ export class OAuthClient {
           })();
         });
         req.on('error', (err: Error) => {
+          if (bodyRejected) return;  // socket teardown from 413 — not a bootstrap failure
           if (!resolved) {
             resolved = true;
             clearTimeout(timeout);
