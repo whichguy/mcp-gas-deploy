@@ -606,6 +606,67 @@ describe('handleExecTool', () => {
     assert.ok(result.error?.includes('No scriptId provided'), `got: ${result.error}`);
   });
 
+  // --- Recurring exec calls ---
+
+  describe('recurring exec calls', () => {
+    it('two sequential calls both succeed when token is valid for each', async () => {
+      const session = makeSession(); // getValidToken stub resolves 'test-token'
+      // Configure independent tokens for each call
+      (session.getValidToken as sinon.SinonStub)
+        .onFirstCall().resolves('token-1')
+        .onSecondCall().resolves('token-2');
+
+      // Return a fresh Response per call — Response body can only be consumed once
+      sinon.stub(globalThis, 'fetch').callsFake(async () => makeScriptsRunSuccess(42));
+
+      const result1 = await handleExecTool(
+        { scriptId: VALID_SCRIPT_ID, js_statement: 'return 42', localDir: tmpDir },
+        makeFileOps(), session, makeDeployOps(),
+      );
+      const result2 = await handleExecTool(
+        { scriptId: VALID_SCRIPT_ID, js_statement: 'return 42', localDir: tmpDir },
+        makeFileOps(), session, makeDeployOps(),
+      );
+
+      assert.equal(result1.success, true, `first call failed: ${result1.error}`);
+      assert.equal(result2.success, true, `second call failed: ${result2.error}`);
+      // getValidToken is called once per handleExecTool invocation (not cached at execTool level)
+      assert.ok(
+        (session.getValidToken as sinon.SinonStub).calledTwice,
+        `getValidToken should be called twice, got: ${(session.getValidToken as sinon.SinonStub).callCount}`,
+      );
+    });
+
+    it('second call returns auth hint when token expired between calls', async () => {
+      const session = makeSession();
+      (session.getValidToken as sinon.SinonStub)
+        .onFirstCall().resolves('test-token')
+        .onSecondCall().resolves(null);
+      (session.getAuthStatus as sinon.SinonStub).resolves({
+        authenticated: true,
+        tokenValid: false,
+      });
+
+      sinon.stub(globalThis, 'fetch').resolves(makeScriptsRunSuccess(42));
+
+      const result1 = await handleExecTool(
+        { scriptId: VALID_SCRIPT_ID, js_statement: 'return 42', localDir: tmpDir },
+        makeFileOps(), session, makeDeployOps(),
+      );
+      const result2 = await handleExecTool(
+        { scriptId: VALID_SCRIPT_ID, js_statement: 'return 42', localDir: tmpDir },
+        makeFileOps(), session, makeDeployOps(),
+      );
+
+      assert.equal(result1.success, true, `first call should succeed, got: ${result1.error}`);
+      assert.equal(result2.success, false, 'second call should fail when token is null');
+      assert.ok(
+        result2.error?.toLowerCase().includes('authenticated') || result2.error?.toLowerCase().includes('token'),
+        `second call error should mention auth/token, got: ${result2.error}`,
+      );
+    });
+  });
+
   // --- scripts.run path ---
 
   describe('scripts.run mode', () => {
