@@ -108,15 +108,7 @@ export class OAuthClient {
       console.error(`OAuth server listening on port ${port}`);
       console.error(`Authorization URL: ${authUrl}`);
 
-      // Try to open browser
-      try {
-        const { default: open } = await import('open');
-        await open(authUrl);
-        console.error('Browser launched for authentication');
-      } catch {
-        console.error('Could not open browser automatically.');
-        console.error('Please open this URL manually:', authUrl);
-      }
+      await this.openBrowser(authUrl);
 
       // Wait for callback (60s timeout)
       const result = await this.waitForCallback(redirectUri, 60000);
@@ -439,6 +431,18 @@ export class OAuthClient {
         });
       });
     });
+  }
+
+  /** Open the system browser for OAuth. Extracted so tests can stub it. */
+  protected async openBrowser(url: string): Promise<void> {
+    try {
+      const { default: open } = await import('open');
+      await open(url);
+      console.error('Browser launched for authentication');
+    } catch {
+      console.error('Could not open browser automatically.');
+      console.error('Please open this URL manually:', url);
+    }
   }
 
   private cleanupServer(): void {

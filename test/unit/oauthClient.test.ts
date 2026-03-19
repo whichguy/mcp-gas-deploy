@@ -97,6 +97,7 @@ describe('OAuthClient — Fix 2: startLogin() with registeredUri creates one ser
       client as unknown as { waitForCallback(u: string, t: number): Promise<{ success: boolean }> },
       'waitForCallback'
     ).resolves({ success: true });
+    sinon.stub(client as any, 'openBrowser').resolves();
 
     await client.startLogin();
 
@@ -110,6 +111,7 @@ describe('OAuthClient — Fix 2: startLogin() with registeredUri creates one ser
     const startServerStub = sinon.stub(client as any, 'startCallbackServer').resolves(12345);
     const startOnPortStub = sinon.stub(client as any, 'startCallbackServerOnPort').resolves();
     sinon.stub(client as any, 'waitForCallback').resolves({ success: true });
+    sinon.stub(client as any, 'openBrowser').resolves();
 
     await client.startLogin();
 
