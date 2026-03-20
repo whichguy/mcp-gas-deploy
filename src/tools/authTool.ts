@@ -5,12 +5,13 @@
  */
 
 import { OAuthClient, loadOAuthConfig } from '../auth/oauthClient.js';
+import { loadOAuthConfigFromJson } from './authConfig.js';
 import { SessionManager } from '../auth/sessionManager.js';
 import { GuidanceFragments } from '../utils/guidanceFragments.js';
 import { loadBootstrapConfig, saveBootstrapConfig } from '../auth/bootstrapConfig.js';
 
 export interface AuthToolParams {
-  action: 'login' | 'logout' | 'status' | 'bootstrap';
+  action: 'login' | 'logout' | 'status' | 'bootstrap' | 'start';
   tokenBrokerUrl?: string;
 }
 
@@ -44,7 +45,7 @@ export const AUTH_TOOL_DEFINITION = {
     properties: {
       action: {
         type: 'string',
-        enum: ['login', 'logout', 'status', 'bootstrap'],
+        enum: ['login', 'logout', 'status', 'bootstrap', 'start'],
         description: 'Authentication action to perform',
       },
       tokenBrokerUrl: {
@@ -118,9 +119,10 @@ export async function handleAuthTool(
         message: 'Authentication failed',
         error: result.error,
         hints: {
-          fix: 'Ensure oauth-config.json is present in .mcp-gas/ in your project directory.',
+          fix: loginOauthConfig
+            ? 'Ensure the oauth-config.json in .mcp-gas/ has the correct client credentials and redirect URIs.'
+            : 'Using bundled OAuth config. If login fails, try auth({action:"start"}) which uses the bundled UWP config automatically.',
           scope: 'Check that the OAuth client has the required scopes enabled.',
-          ...(!loginOauthConfig ? { oauthConfig: 'No oauth-config.json found — download from GCP Console > APIs & Services > Credentials > your Desktop App client.' } : {}),
         },
       };
     }
@@ -175,13 +177,63 @@ export async function handleAuthTool(
       };
     }
 
+    case 'start': {
+      const existingToken = await sessionManager.getValidToken();
+      if (existingToken) {
+        const status = await sessionManager.getAuthStatus();
+        const expiresMsg = status.expiresIn
+          ? `Token expires in ${Math.floor(status.expiresIn / 60)} minutes`
+          : 'Token status unknown';
+        return {
+          success: true,
+          action: 'start',
+          message: `Authenticated as ${status.user?.email}. ${expiresMsg}.`,
+          user: status.user ? { email: status.user.email, name: status.user.name } : undefined,
+        };
+      }
+
+      const bootstrapConfig = await loadBootstrapConfig();
+      if (bootstrapConfig?.tokenBrokerUrl) {
+        const bResult = await oauthClient.startBootstrapFlow(bootstrapConfig.tokenBrokerUrl);
+        if (bResult.success && bResult.user) {
+          return {
+            success: true,
+            action: 'start',
+            message: `Authenticated as ${bResult.user.email} via token broker`,
+            user: { email: bResult.user.email, name: bResult.user.name },
+          };
+        }
+        // Bootstrap failed — log and fall through to PKCE login
+        console.error(`[auth:start] Bootstrap flow failed (${bResult.error ?? 'unknown error'}), falling back to login`);
+      }
+
+      const loginConfig = (await loadOAuthConfig()) ?? loadOAuthConfigFromJson();
+      const loginClient = new OAuthClient(loginConfig, sessionManager);
+      const loginResult = await loginClient.startLogin();
+      if (loginResult.success && loginResult.user) {
+        return {
+          success: true,
+          action: 'start',
+          message: `Authenticated as ${loginResult.user.email}`,
+          user: { email: loginResult.user.email, name: loginResult.user.name },
+        };
+      }
+
+      return {
+        success: false,
+        action: 'start',
+        message: 'Authentication failed. No valid auth path available.',
+        error: loginResult.error ?? 'Unknown error',
+      };
+    }
+
     case 'status': {
       const status = await sessionManager.getAuthStatus();
 
       const statusOauthConfig = await loadOAuthConfig();
       const setupHints: Record<string, string> = {};
       if (!statusOauthConfig) {
-        setupHints.oauthConfig = 'No oauth-config.json found in .mcp-gas/ — run setup({operation: "init"}) first.';
+        setupHints.oauthConfig = 'No oauth-config.json found in .mcp-gas/ — using bundled UWP config. Run auth({action:"start"}) to authenticate.';
       }
 
       if (!status.authenticated) {

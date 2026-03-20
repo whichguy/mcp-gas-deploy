@@ -25,33 +25,18 @@ The server requests these scopes automatically during login:
 
 ## Setup
 
-1. **Install and build:**
+1. **Clone and run setup** (installs deps, builds, and registers the MCP server in `~/.claude/settings.json`):
 
    ```bash
    git clone <repo-url> && cd mcp-gas-deploy
-   npm install
-   npm run build
+   npm run setup
    ```
 
-2. **Place OAuth credentials** as `oauth-config.json` in one of:
+   > Run from a plain terminal session, not from within Claude Code (the sandbox may restrict writes to `~/.claude/settings.json`).
 
-   - The working directory (project root)
-   - `~/.config/mcp-gas/oauth-config.json`
+2. **Restart Claude Code** so it picks up the new MCP server entry.
 
-3. **Configure your MCP client.** For Claude Code, add to `.claude/settings.json`:
-
-   ```json
-   {
-     "mcpServers": {
-       "mcp-gas-deploy": {
-         "command": "node",
-         "args": ["/absolute/path/to/mcp-gas-deploy/dist/server.js"]
-       }
-     }
-   }
-   ```
-
-4. **Authenticate** by calling the `auth` tool with `action: "login"`. This opens a browser for Google OAuth consent.
+3. **Authenticate** by calling `auth({action:"start"})`. This opens a browser for Google OAuth consent.
 
 ## MCP Tools
 
